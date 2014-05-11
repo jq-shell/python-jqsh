@@ -1,1 +1,5 @@
-__all__ = ['channel', 'filter']
+__all__ = [
+    'channel',
+    'filter',
+    'parser'
+]
