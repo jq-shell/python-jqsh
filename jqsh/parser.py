@@ -4,6 +4,7 @@ import string
 
 TokenType = enum.Enum('TokenType', [
     'close_paren',
+    'illegal',
     'open_paren',
     'trailing_whitespace'
 ], module=__name__)
@@ -44,6 +45,9 @@ def parse(tokens):
         tokens = list(tokenize(tokens))
     if not len(tokens):
         return jqsh.filter.Filter() # token list is empty, return an empty filter
+    for token in tokens:
+        if token.type is TokenType.illegal:
+            raise SyntaxError('illegal character: ' + repr(token.string[0]))
     if isinstance(tokens[-1], Token) and tokens[-1].type is TokenType.trailing_whitespace:
         if len(tokens) == 1:
             return jqsh.filter.Filter() # token list consists entirely of whitespace, return an empty filter
@@ -88,6 +92,8 @@ def tokenize(jqsh_string):
             whitespace_prefix = ''
             rest_string = rest_string[1:]
         else:
-            raise SyntaxError('illegal character: ' + repr(rest_string[0]))
+            yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string)
+            whitespace_prefix = ''
+            rest_string = ''
     if len(whitespace_prefix):
         yield Token(TokenType.trailing_whitespace, token_string=whitespace_prefix)
