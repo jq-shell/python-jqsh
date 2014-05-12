@@ -4,6 +4,7 @@ import string
 
 TokenType = enum.Enum('TokenType', [
     'close_paren',
+    'comment',
     'illegal',
     'open_paren',
     'trailing_whitespace'
@@ -15,8 +16,8 @@ class Token:
     
     def __init__(self, token_type, token_string=None, text=None):
         self.type = token_type
-        self.string = token_string
-        self.text = text
+        self.string = token_string # ''.join(token.string for token in tokenize(jqsh_string)) == jqsh_string
+        self.text = text # metadata like the name of a name token or the digits of a number literal. None for simple tokens
     
     def __repr__(self):
         return 'jqsh.parser.Token(' + repr(self.type) + ('' if self.string is None else ', token_string=' + repr(self.string)) + ('' if self.text is None else ', text=' + repr(self.text)) + ')'
@@ -54,6 +55,7 @@ def parse(tokens):
         else:
             tokens[-2].string += tokens[-1].string # merge the trailing whitespace into the second-to-last token
             tokens.pop() # remove the trailing_whitespace token
+    tokens = [token for token in tokens if token.type is not TokenType.comment]
     paren_balance = 0
     paren_start = None
     for i, token in reversed(list(enumerate(tokens))): # iterating over the token list in reverse because we modify it in the process
@@ -87,6 +89,16 @@ def tokenize(jqsh_string):
         if rest_string[0] in string.whitespace:
             whitespace_prefix += rest_string[0]
             rest_string = rest_string[1:]
+        elif rest_string[0] == '#':
+            rest_string = rest_string[1:]
+            comment = ''
+            while len(rest_string):
+                if rest_string[0] == '\n':
+                    break
+                comment += rest_string[0]
+                rest_string = rest_string[1:]
+            yield Token(TokenType.comment, token_string=whitespace_prefix + '#' + comment, text=comment)
+            whitespace_prefix = ''
         elif rest_string[0] in symbols:
             yield Token(symbols[rest_string[0]], token_string=whitespace_prefix + rest_string[0])
             whitespace_prefix = ''
