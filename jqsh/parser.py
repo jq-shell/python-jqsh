@@ -84,7 +84,12 @@ def parse(tokens):
 
 def tokenize(jqsh_string):
     rest_string = jqsh_string
+    if not isinstance(rest_string, str):
+        rest_string = rest_string.decode('utf-8')
     whitespace_prefix = ''
+    if rest_string.startswith('\ufeff'):
+        whitespace_prefix += rest_string[0]
+        rest_string = rest_string[1:]
     while len(rest_string):
         if rest_string[0] in string.whitespace:
             whitespace_prefix += rest_string[0]
