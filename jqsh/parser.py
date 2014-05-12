@@ -44,6 +44,7 @@ symbols = {
 def parse(tokens):
     if isinstance(tokens, str):
         tokens = list(tokenize(tokens))
+    tokens = [token for token in tokens if isinstance(token, jqsh.filter.Filter) or token.type is not TokenType.comment]
     if not len(tokens):
         return jqsh.filter.Filter() # token list is empty, return an empty filter
     for token in tokens:
@@ -55,7 +56,6 @@ def parse(tokens):
         else:
             tokens[-2].string += tokens[-1].string # merge the trailing whitespace into the second-to-last token
             tokens.pop() # remove the trailing_whitespace token
-    tokens = [token for token in tokens if token.type is not TokenType.comment]
     paren_balance = 0
     paren_start = None
     for i, token in reversed(list(enumerate(tokens))): # iterating over the token list in reverse because we modify it in the process
