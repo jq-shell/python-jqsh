@@ -1,6 +1,7 @@
 import enum
 import jqsh.filter
 import string
+import unicodedata
 
 TokenType = enum.Enum('TokenType', [
     'close_array',
@@ -55,7 +56,7 @@ def parse(tokens):
         return jqsh.filter.Filter() # token list is empty, return an empty filter
     for token in tokens:
         if token.type is TokenType.illegal:
-            raise SyntaxError('illegal character: ' + repr(token.string[0]))
+            raise SyntaxError('illegal character: ' + repr(token.text[0]) + ' (U+' + format(ord(token.text[0]), 'x').upper() + ' ' + unicodedata.name(token.text[0], 'unknown character') + ')')
     if isinstance(tokens[-1], Token) and tokens[-1].type is TokenType.trailing_whitespace:
         if len(tokens) == 1:
             return jqsh.filter.Filter() # token list consists entirely of whitespace, return an empty filter
@@ -118,7 +119,7 @@ def tokenize(jqsh_string):
                     rest_string = rest_string[len(symbol):]
                     break
         else:
-            yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string)
+            yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string, text=rest_string)
             whitespace_prefix = ''
             rest_string = ''
     if len(whitespace_prefix):
