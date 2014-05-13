@@ -19,7 +19,7 @@ class FilterThread(threading.Thread):
 class Filter:
     """Filters are the basic building block of the jqsh language. This base class implements the empty filter."""
     def __repr__(self):
-        return 'jqsh.filter.Filter()'
+        return 'jqsh.filter.' + self.__class__.__name__ + '()'
     
     def __str__(self):
         """The filter's representation in jqsh."""
@@ -43,10 +43,17 @@ class Parens(Filter):
         self.attribute = attribute
     
     def __repr__(self):
-        return 'jqsh.filter.Parens(' + ('' if self.attribute.__class__ == Filter else repr(self.attribute)) + ')'
+        return 'jqsh.filter.' + self.__class__.__name__ + '(' + ('' if self.attribute.__class__ == Filter else repr(self.attribute)) + ')'
     
     def __str__(self):
         return '(' + str(self.attribute) + ')'
     
     def run(self, input_channel):
         yield from self.attribute.start(input_channel)
+
+class Array(Parens):
+    def __str__(self):
+        return '[' + str(self.attribute) + ']'
+    
+    def run(self, input_channel):
+        yield list(self.attribute.start(input_channel))

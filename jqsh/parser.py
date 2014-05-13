@@ -3,9 +3,11 @@ import jqsh.filter
 import string
 
 TokenType = enum.Enum('TokenType', [
+    'close_array',
     'close_paren',
     'comment',
     'illegal',
+    'open_array',
     'open_paren',
     'trailing_whitespace'
 ], module=__name__)
@@ -29,16 +31,20 @@ class Token:
             return self.string
 
 matching_parens = { # a dictionary that maps opening parenthesis-like tokens (parens) to the associated closing parens
+    TokenType.open_array: TokenType.close_array,
     TokenType.open_paren: TokenType.close_paren
 }
 
 paren_filters = {
+    TokenType.open_array: jqsh.filter.Array,
     TokenType.open_paren: jqsh.filter.Parens
 }
 
 symbols = {
     '(': TokenType.open_paren,
-    ')': TokenType.close_paren
+    ')': TokenType.close_paren,
+    '[': TokenType.open_array,
+    ']': TokenType.close_array
 }
 
 def parse(tokens):
@@ -104,10 +110,13 @@ def tokenize(jqsh_string):
                 rest_string = rest_string[1:]
             yield Token(TokenType.comment, token_string=whitespace_prefix + '#' + comment, text=comment)
             whitespace_prefix = ''
-        elif rest_string[0] in symbols:
-            yield Token(symbols[rest_string[0]], token_string=whitespace_prefix + rest_string[0])
-            whitespace_prefix = ''
-            rest_string = rest_string[1:]
+        elif any(rest_string.startswith(symbol) for symbol in symbols):
+            for symbol, token_type in sorted(symbols.items(), key=lambda pair: -len(pair[0])): # look at longer symbols first, so that a += is not mistakenly tokenized as a +
+                if rest_string.startswith(symbol):
+                    yield Token(token_type, token_string=whitespace_prefix + rest_string[:len(symbol)])
+                    whitespace_prefix = ''
+                    rest_string = rest_string[len(symbol):]
+                    break
         else:
             yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string)
             whitespace_prefix = ''
