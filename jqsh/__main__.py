@@ -8,7 +8,7 @@ import json
 while True: # a simple repl
     try:
         for value in jqsh.parser.parse(input('jqsh> ')).start():
-            json.dump(value, sys.stdout, sort_keys=True, indent=4, separators=(',', ': '))
+            json.dump(value, sys.stdout, sort_keys=True, indent=2, separators=(',', ': '))
             print() # add a newline because json.dump doesn't end its values with newlines
     except EOFError:
         print('^D')
