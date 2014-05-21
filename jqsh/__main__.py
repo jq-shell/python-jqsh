@@ -44,14 +44,14 @@ while len(arguments):
 if filter_argument is not None:
     #TODO parse stdin
     for value in jqsh.parser.parse(filter_argument).start():
-        json.dump(value, sys.stdout, sort_keys=True, indent=2, separators=(',', ': '))
+        json.dump(value, sys.stdout, sort_keys=True, indent=2)
         print() # add a newline because json.dump doesn't end its values with newlines
     sys.exit()
 
 while True: # a simple repl
     try:
         for value in jqsh.parser.parse(input('jqsh> ')).start():
-            json.dump(value, sys.stdout, sort_keys=True, indent=2, separators=(',', ': '))
+            json.dump(value, sys.stdout, sort_keys=True, indent=2)
             print() # add a newline because json.dump doesn't end its values with newlines
     except EOFError:
         print('^D')
