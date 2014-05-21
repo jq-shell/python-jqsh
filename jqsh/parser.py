@@ -49,6 +49,17 @@ class Token:
         else:
             return self.string
 
+escapes = { # string literal escape sequences, sans \u and \(
+    '"': '"',
+    '/': '/',
+    '\\': '\\',
+    'b': '\b',
+    'f': '\f',
+    'n': '\n',
+    'r': '\r',
+    't': '\t'
+}
+
 json_tokens = [ # token types that are allowed in pure JSON
     TokenType.close_array,
     TokenType.close_object,
@@ -277,6 +288,22 @@ def parse_json(tokens):
         raise SyntaxError('multiple top-level JSON values found')
     return ret
 
+def parse_json_values(tokens):
+    if isinstance(tokens, str):
+        tokens = list(tokenize(tokens))
+    prefix_length = 1
+    last_exception = None
+    while len(tokens):
+        if prefix_length > len(tokens):
+            raise last_exception
+        try:
+            yield parse_json(tokens[:prefix_length])
+            tokens = tokens[prefix_length:]
+            prefix_length = 1
+        except Incomplete as e:
+            last_exception = e
+            prefix_length += 1
+
 def set_value_at_key_path(structure, key_path, value):
     if len(key_path):
         substructure = structure
@@ -302,6 +329,34 @@ def tokenize(jqsh_string):
         if rest_string[0] in string.whitespace:
             whitespace_prefix += rest_string[0]
             rest_string = rest_string[1:]
+        elif rest_string[0] == '"':
+            rest_string = rest_string[1:]
+            token_type = TokenType.string_incomplete
+            string_literal = '"'
+            string_content = ''
+            while len(rest_string):
+                if rest_string[0] == '"':
+                    token_type = TokenType.string
+                    string_literal += '"'
+                    rest_string = rest_string[1:]
+                    break
+                elif rest_string[0] == '\\':
+                    rest_string = rest_string[1:]
+                    if rest_string[0] in escapes:
+                        string_literal += '\\'
+                        string_literal += rest_string[0]
+                        string_content += escapes[rest_string[0]]
+                        rest_string = rest_string[1:]
+                    else:
+                        yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
+                        yield Token(TokenType.illegal, token_string=whitespace_prefix + '\\' + rest_string, text='\\' + rest_string)
+                        whitespace_prefix = ''
+                        rest_string = ''
+                else:
+                    string_literal += rest_string[0]
+                    string_content += rest_string[0]
+                    rest_string = rest_string[1:]
+            yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
         elif rest_string[0] == '#':
             rest_string = rest_string[1:]
             comment = ''

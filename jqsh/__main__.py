@@ -14,6 +14,7 @@ Options:
 
 import sys
 
+import jqsh.channel
 import jqsh.parser
 import json
 
@@ -42,8 +43,11 @@ while len(arguments):
         sys.exit('[!!!!] invalid argument: ' + arguments[0])
 
 if filter_argument is not None:
-    #TODO parse stdin
-    for value in jqsh.parser.parse(filter_argument).start():
+    stdin_channel = jqsh.channel.Channel()
+    for value in jqsh.parser.parse_json_values(sys.stdin.read()):
+        stdin_channel.push(value)
+    stdin_channel.terminate()
+    for value in jqsh.parser.parse(filter_argument).start(stdin_channel):
         json.dump(value, sys.stdout, sort_keys=True, indent=2)
         print() # add a newline because json.dump doesn't end its values with newlines
     sys.exit()
