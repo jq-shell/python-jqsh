@@ -14,13 +14,20 @@ TokenType = enum.Enum('TokenType', [
     'colon',
     'comma',
     'comment',
+    'dot',
     'illegal',
+    'minus',
     'name',
     'number',
     'open_array',
     'open_object',
     'open_paren',
     'string',
+    'string_end',
+    'string_end_incomplete',
+    'string_incomplete',
+    'string_middle',
+    'string_start',
     'trailing_whitespace'
 ], module=__name__)
 
@@ -70,6 +77,8 @@ symbols = {
     '(': TokenType.open_paren,
     ')': TokenType.close_paren,
     ',': TokenType.comma,
+    '-': TokenType.minus,
+    '.': TokenType.dot,
     ':': TokenType.colon,
     '[': TokenType.open_array,
     ']': TokenType.close_array,
@@ -82,6 +91,34 @@ def illegal_token_exception(token, position=None, expected=None):
         return SyntaxError('illegal character' + ('' if position is None else ' at position ' + repr(position)) + ': ' + repr(token.text[0]) + ' (U+' + format(ord(token.text[0]), 'x').upper() + ' ' + unicodedata.name(token.text[0], 'unknown character') + ')')
     else:
         return SyntaxError('illegal ' + token.type.name + ' token' + ('' if position is None else ' at position ' + repr(position)) + ('' if expected is None else ' (expected ' + ' or '.join(sorted(expected_token_type.name for expected_token_type in expected)) + ')'))
+
+def json_to_tokens(json_value):
+    if json_value is False:
+        yield Token(TokenType.name, text='false')
+    elif json_value is None:
+        yield Token(TokenType.name, text='null')
+    elif json_value is True:
+        yield Token(TokenType.name, text='true')
+    elif isinstance(json_value, decimal.Decimal) or isinstance(json_value, int) or isinstance(json_value, float):
+        yield Token(TokenType.number, text=str(json_value))
+    elif isinstance(json_value, list):
+        yield Token(TokenType.open_array)
+        for i, item in enumerate(json_value):
+            if i > 0:
+                yield Token(TokenType.comma)
+            yield from json_to_tokens(item)
+        yield Token(TokenType.close_array)
+    elif isinstance(json_value, dict):
+        yield Token(TokenType.open_object)
+        for i, (key, value) in enumerate(sorted(json_value.items(), key=lambda pair: pair[0])): # sort the pairs of an object by their names
+            if i > 0:
+                yield Token(TokenType.comma)
+            yield Token(TokenType.string, text=key)
+            yield Token(TokenType.colon)
+            yield from json_to_tokens(value)
+        yield Token(TokenType.close_object)
+    else:
+        yield Token(TokenType.illegal)
 
 def parse(tokens):
     if isinstance(tokens, str):
@@ -214,6 +251,8 @@ def parse_json(tokens):
                             raise illegal_token_exception(token, position=token_index, expected={TokenType.colon})
                         else:
                             token_index += 1
+                            if token_index >= len(tokens):
+                                raise Incomplete('unclosed JSON object at key path ' + repr(key_path[:-1]))
                             keep_closing = False
                     else:
                         raise illegal_token_exception(token, position=token_index, expected={TokenType.string})
@@ -229,6 +268,8 @@ def parse_json(tokens):
                 elif token.type is TokenType.comma:
                     key_path[-1] += 1
                     token_index += 1
+                    if token_index >= len(tokens):
+                        raise Incomplete('unclosed JSON array at key path ' + repr(key_path[:-1]))
                     keep_closing = False
                 else:
                     raise illegal_token_exception(token, position=token_index, expected={TokenType.close_array, TokenType.comma})
@@ -270,6 +311,20 @@ def tokenize(jqsh_string):
                 comment += rest_string[0]
                 rest_string = rest_string[1:]
             yield Token(TokenType.comment, token_string=whitespace_prefix + '#' + comment, text=comment)
+            whitespace_prefix = ''
+        elif rest_string[0] in string.ascii_letters:
+            name = ''
+            while len(rest_string) and rest_string[0] in string.ascii_letters:
+                name += rest_string[0]
+                rest_string = rest_string[1:]
+            yield Token(TokenType.name, token_string=whitespace_prefix + name, text=name)
+            whitespace_prefix = ''
+        elif rest_string[0] in string.digits:
+            number = ''
+            while len(rest_string) and rest_string[0] in string.digits:
+                number += rest_string[0]
+                rest_string = rest_string[1:]
+            yield Token(TokenType.number, token_string=whitespace_prefix + number, text=number)
             whitespace_prefix = ''
         elif any(rest_string.startswith(symbol) for symbol in symbols):
             for symbol, token_type in sorted(symbols.items(), key=lambda pair: -len(pair[0])): # look at longer symbols first, so that a += is not mistakenly tokenized as a +
