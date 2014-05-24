@@ -5,16 +5,11 @@ class FilterThread(threading.Thread):
     def __init__(self, the_filter, input_channel=None):
         super().__init__(name='jqsh FilterThread')
         self.filter = the_filter
-        if input_channel is None:
-            input_channel = jqsh.channel.Channel()
-            input_channel.terminate()
-        self.input_channel = input_channel
+        self.input_channel = jqsh.channel.Channel(terminated=True) if input_channel is None else input_channel
         self.output_channel = jqsh.channel.Channel()
-
+    
     def run(self):
-        for value in self.filter.run(self.input_channel):
-            self.output_channel.push(value)
-        self.output_channel.terminate()
+        self.filter.run_raw(self.input_channel, self.output_channel)
 
 class Filter:
     """Filters are the basic building block of the jqsh language. This base class implements the empty filter."""
@@ -26,12 +21,34 @@ class Filter:
         return ''
     
     def run(self, input_channel):
-        """This is called from the filter thread, and should be overridden by subclasses.
+        """This is called from run_raw, and should be overridden by subclasses.
         
-        Yielded values are pushed onto the output channel, and it is terminated on return.
+        Yielded values are pushed onto the output channel, and it is terminated on return. Exceptions are handled by run_raw.
         """
         return
         yield # the empty generator #FROM http://stackoverflow.com/a/13243870/667338
+    
+    def run_raw(self, input_channel, output_channel):
+        """This is called from the filter thread, and may be overridden by subclasses instead of run."""
+        def run_thread(bridge):
+            for value in self.run(input_channel=bridge):
+                output_channel.push(value)
+                if isinstance(value, Exception):
+                    break
+        
+        bridge_channel = jqsh.channel.Channel()
+        threading.Thread(target=run_thread, kwargs={'bridge': bridge_channel}).start()
+        while True:
+            try:
+                token = input_channel.pop()
+            except StopIteration:
+                break
+            bridge_channel.push(token)
+            if isinstance(token, Exception):
+                output_channel.push(token)
+                break
+        bridge_channel.terminate()
+        output_channel.terminate()
     
     def start(self, input_channel=None):
         filter_thread = FilterThread(self, input_channel=input_channel)

@@ -6,13 +6,16 @@ class Terminator:
     """a special value used to signal the end of a channel"""
 
 class Channel:
-    def __init__(self, *args):
+    def __init__(self, *args, terminated=False):
         self.input_lock = threading.Lock()
+        self.input_terminated = False # has the terminator been pushed?
         self.output_lock = threading.Lock()
-        self.terminated = False
+        self.terminated = False # has the terminator been popped?
         self.values = queue.Queue()
         for value in args:
-            self.values.put(value)
+            self.push(value)
+        if terminated:
+            self.terminate()
     
     def __iter__(self):
         return self
@@ -40,11 +43,11 @@ class Channel:
                 except jqsh.parser.Incomplete:
                     continue
     
-    def pop(self, wait=False):
+    def pop(self, wait=True):
         """Returns a token. Raises queue.Empty if no element is currently available, and StopIteration if the channel is terminated."""
-        if self.terminated:
-            raise StopIteration('jqsh channel has terminated')
         with self.output_lock:
+            if self.terminated:
+                raise StopIteration('jqsh channel has terminated')
             ret = self.values.get(block=wait)
             if isinstance(ret, Terminator):
                 self.terminated = True
@@ -54,6 +57,8 @@ class Channel:
     def push(self, value):
         if isinstance(value, jqsh.parser.Token):
             with self.input_lock:
+                if self._terminated:
+                    raise RuntimeError('jqsh channel has terminated')
                 self.values.put(value)
         else:
             with self.input_lock:
@@ -61,4 +66,6 @@ class Channel:
                     self.values.put(token)
     
     def terminate(self):
-        self.values.put(Terminator())
+        with self.input_lock:
+            self._terminated = True
+            self.values.put(Terminator())

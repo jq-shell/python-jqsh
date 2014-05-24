@@ -43,10 +43,7 @@ while len(arguments):
         sys.exit('[!!!!] invalid argument: ' + arguments[0])
 
 if filter_argument is not None:
-    stdin_channel = jqsh.channel.Channel()
-    for value in jqsh.parser.parse_json_values(sys.stdin.read()):
-        stdin_channel.push(value)
-    stdin_channel.terminate()
+    stdin_channel = jqsh.channel.Channel(*jqsh.parser.parse_json_values(sys.stdin.read()), terminated=True)
     for value in jqsh.parser.parse(filter_argument).start(stdin_channel):
         json.dump(value, sys.stdout, sort_keys=True, indent=2)
         print() # add a newline because json.dump doesn't end its values with newlines
@@ -63,5 +60,5 @@ while True: # a simple repl
     except KeyboardInterrupt:
         print() # add a newline after the Python-provided '^C'
         continue
-    except SyntaxError as e:
+    except (SyntaxError, jqsh.parser.Incomplete) as e:
         print('jqsh: syntax error: ' + str(e))
