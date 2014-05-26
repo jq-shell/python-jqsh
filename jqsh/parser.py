@@ -170,7 +170,7 @@ def parse(tokens):
     if len(tokens) == 1 and isinstance(tokens[0], jqsh.filter.Filter):
         return tokens[0] # finished parsing
     else:
-        raise SyntaxError('could not parse token list')
+        raise SyntaxError('could not parse token list: ' + repr(tokens))
 
 def parse_json(tokens):
     if isinstance(tokens, str):
