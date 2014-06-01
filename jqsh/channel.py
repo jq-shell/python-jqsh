@@ -1,3 +1,4 @@
+import jqsh
 import jqsh.parser
 import queue
 import threading
@@ -39,7 +40,7 @@ class Channel:
                     raise StopIteration('jqsh channel has terminated')
                 tokens.append(token)
                 try:
-                    return jqsh.parser.parse_json(tokens)
+                    return jqsh.parser.parse_json(tokens, allow_extension_types=True)
                 except jqsh.parser.Incomplete:
                     continue
     
@@ -57,15 +58,15 @@ class Channel:
     def push(self, value):
         if isinstance(value, jqsh.parser.Token):
             with self.input_lock:
-                if self._terminated:
+                if self.input_terminated:
                     raise RuntimeError('jqsh channel has terminated')
                 self.values.put(value)
         else:
             with self.input_lock:
-                for token in jqsh.parser.json_to_tokens(value):
+                for token in jqsh.parser.json_to_tokens(value, allow_extension_types=True):
                     self.values.put(token)
     
     def terminate(self):
         with self.input_lock:
-            self._terminated = True
+            self.input_terminated = True
             self.values.put(Terminator())

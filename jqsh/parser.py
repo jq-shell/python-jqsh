@@ -1,5 +1,6 @@
 import decimal
 import enum
+import jqsh
 import jqsh.filter
 import string
 import unicodedata
@@ -48,6 +49,12 @@ class Token:
             return "'" + repr(self) + "'"
         else:
             return self.string
+
+atomic_tokens = {
+    TokenType.name: jqsh.filter.Name,
+    #TokenType.number: jqsh.filter.NumberLiteral,
+    #TokenType.string: jqsh.filter.StringLiteral
+}
 
 escapes = { # string literal escape sequences, sans \u and \(
     '"': '"',
@@ -103,11 +110,20 @@ def illegal_token_exception(token, position=None, expected=None):
     else:
         return SyntaxError('illegal ' + token.type.name + ' token' + ('' if position is None else ' at position ' + repr(position)) + ('' if expected is None else ' (expected ' + ' or '.join(sorted(expected_token_type.name for expected_token_type in expected)) + ')'))
 
-def json_to_tokens(json_value):
-    if json_value is False:
+def json_to_tokens(json_value, allow_extension_types=False):
+    if allow_extension_types and isinstance(json_value, tuple) and len(json_value) == 2:
+        yield Token(TokenType.open_paren)
+        yield from json_to_tokens(json_value[0], allow_extension_types=True)
+        yield Token(TokenType.colon)
+        yield from json_to_tokens(json_value[1], allow_extension_types=True)
+        yield Token(TokenType.close_paren)
+    elif json_value is False:
         yield Token(TokenType.name, text='false')
     elif json_value is None:
         yield Token(TokenType.name, text='null')
+    elif allow_extension_types and isinstance(json_value, Exception):
+        yield Token(TokenType.name, text='raise')
+        yield Token(TokenType.string, text=str(json_value))
     elif json_value is True:
         yield Token(TokenType.name, text='true')
     elif isinstance(json_value, decimal.Decimal) or isinstance(json_value, int) or isinstance(json_value, float):
@@ -146,6 +162,8 @@ def parse(tokens):
         else:
             tokens[-2].string += tokens[-1].string # merge the trailing whitespace into the second-to-last token
             tokens.pop() # remove the trailing_whitespace token
+    
+    # parenthesis-like filters
     paren_balance = 0
     paren_start = None
     for i, token in reversed(list(enumerate(tokens))): # iterating over the token list in reverse because we modify it in the process
@@ -167,12 +185,18 @@ def parse(tokens):
                 paren_start = None
     if paren_balance != 0:
         raise SyntaxError('mismatched parens')
+    
+    # atomic filters
+    for i, token in reversed(list(enumerate(tokens))):
+        if isinstance(token, Token) and token.type in atomic_tokens:
+            tokens[i] = atomic_tokens[token.type](text=token.text)
+    
     if len(tokens) == 1 and isinstance(tokens[0], jqsh.filter.Filter):
         return tokens[0] # finished parsing
     else:
         raise SyntaxError('could not parse token list: ' + repr(tokens))
 
-def parse_json(tokens):
+def parse_json(tokens, allow_extension_types=False):
     if isinstance(tokens, str):
         tokens = list(tokenize(tokens))
     if not len(tokens):
@@ -192,6 +216,15 @@ def parse_json(tokens):
             elif token.text == 'null':
                 ret = set_value_at_key_path(ret, key_path, None)
                 token_index += 1
+            elif allow_extension_types and token.text == 'raise':
+                token_index += 1
+                if token_index >= len(tokens):
+                    raise Incomplete('unnamed exception')
+                elif tokens[token_index].type is not TokenType.string:
+                    raise illegal_token_exception(tokens[token_index], position=token_index, expected={TokenType.string})
+                else:
+                    ret = set_value_at_key_path(ret, key_path, Exception(tokens[token_index].text))
+                    token_index += 1
             elif token.text == 'true':
                 ret = set_value_at_key_path(ret, key_path, True)
                 token_index += 1

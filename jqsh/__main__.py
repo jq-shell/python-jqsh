@@ -14,7 +14,10 @@ Options:
 
 import sys
 
+import jqsh
 import jqsh.channel
+import jqsh.cli
+import jqsh.filter
 import jqsh.parser
 import json
 
@@ -44,16 +47,12 @@ while len(arguments):
 
 if filter_argument is not None:
     stdin_channel = jqsh.channel.Channel(*jqsh.parser.parse_json_values(sys.stdin.read()), terminated=True)
-    for value in jqsh.parser.parse(filter_argument).start(stdin_channel):
-        json.dump(value, sys.stdout, sort_keys=True, indent=2)
-        print() # add a newline because json.dump doesn't end its values with newlines
+    jqsh.cli.print_output(jqsh.filter.FilterThread(jqsh.parser.parse(filter_argument), input_channel=stdin_channel))
     sys.exit()
 
 while True: # a simple repl
     try:
-        for value in jqsh.parser.parse(input('jqsh> ')).start():
-            json.dump(value, sys.stdout, sort_keys=True, indent=2)
-            print() # add a newline because json.dump doesn't end its values with newlines
+        jqsh.cli.print_output(jqsh.parser.parse(input('jqsh> ')))
     except EOFError:
         print('^D')
         break

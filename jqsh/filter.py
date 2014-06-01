@@ -1,4 +1,6 @@
+import jqsh
 import jqsh.channel
+import jqsh.functions
 import threading
 
 class FilterThread(threading.Thread):
@@ -37,7 +39,8 @@ class Filter:
                     break
         
         bridge_channel = jqsh.channel.Channel()
-        threading.Thread(target=run_thread, kwargs={'bridge': bridge_channel}).start()
+        helper_thread = threading.Thread(target=run_thread, kwargs={'bridge': bridge_channel})
+        helper_thread.start()
         while True:
             try:
                 token = input_channel.pop()
@@ -48,6 +51,7 @@ class Filter:
                 output_channel.push(token)
                 break
         bridge_channel.terminate()
+        helper_thread.join()
         output_channel.terminate()
     
     def start(self, input_channel=None):
@@ -74,3 +78,22 @@ class Array(Parens):
     
     def run(self, input_channel):
         yield list(self.attribute.start(input_channel))
+
+class Name(Filter):
+    def __init__(self, text):
+        self.name = text
+    
+    def __repr__(self):
+        return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(self.name) + ')'
+    
+    def __str__(self):
+        return self.name
+    
+    def run_raw(self, input_channel, output_channel):
+        try:
+            builtin = jqsh.functions.get_builtin(self.name)
+        except KeyError:
+            output_channel.push(Exception('numArgs' if self.name in jqsh.functions.builtin_functions else 'name'))
+            output_channel.terminate()
+        else:
+            builtin(input_channel=input_channel, output_channel=output_channel)
