@@ -1,3 +1,4 @@
+import decimal
 import jqsh
 import jqsh.channel
 import jqsh.functions
@@ -80,8 +81,8 @@ class Array(Parens):
         yield list(self.attribute.start(input_channel))
 
 class Name(Filter):
-    def __init__(self, text):
-        self.name = text
+    def __init__(self, name):
+        self.name = name
     
     def __repr__(self):
         return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(self.name) + ')'
@@ -97,3 +98,49 @@ class Name(Filter):
             output_channel.terminate()
         else:
             builtin(input_channel=input_channel, output_channel=output_channel)
+
+class NumberLiteral(Filter):
+    def __init__(self, number):
+        self.number = number if isinstance(number, decimal.Decimal) else decimal.Decimal(number)
+    
+    def __repr__(self):
+        return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(str(self.number)) + ')'
+    
+    def __str__(self):
+        return str(self.number)
+    
+    def run(self, input_channel):
+        yield decimal.Decimal(self.number)
+
+class StringLiteral(Filter):
+    def __init__(self, text):
+        self.text = text
+    
+    def __repr__(self):
+        return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(self.text) + ')'
+    
+    def __str__(self):
+        def escape(character):
+            if character == '\b':
+                return '\\b'
+            elif character == '\t':
+                return '\\t'
+            elif character == '\n':
+                return '\\n'
+            elif character == '\f':
+                return '\\f'
+            elif character == '\r':
+                return '\\r'
+            elif character == '"':
+                return '\\"'
+            elif character == '\\':
+                return '\\\\'
+            elif ord(character) <= 0x1f:
+                return '\\u{:04x}'.format(ord(character))
+            else:
+                return character
+        
+        return '"' + ''.join(escape(c) for c in self.name) + '"'
+    
+    def run(self, input_channel):
+        yield self.text

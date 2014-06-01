@@ -52,8 +52,8 @@ class Token:
 
 atomic_tokens = {
     TokenType.name: jqsh.filter.Name,
-    #TokenType.number: jqsh.filter.NumberLiteral,
-    #TokenType.string: jqsh.filter.StringLiteral
+    TokenType.number: jqsh.filter.NumberLiteral,
+    TokenType.string: jqsh.filter.StringLiteral
 }
 
 escapes = { # string literal escape sequences, sans \u and \(
@@ -105,10 +105,10 @@ symbols = {
 }
 
 def illegal_token_exception(token, position=None, expected=None):
-    if token.type is TokenType.illegal:
+    if token.type is TokenType.illegal and token.text:
         return SyntaxError('illegal character' + ('' if position is None else ' at position ' + repr(position)) + ': ' + repr(token.text[0]) + ' (U+' + format(ord(token.text[0]), 'x').upper() + ' ' + unicodedata.name(token.text[0], 'unknown character') + ')')
     else:
-        return SyntaxError('illegal ' + token.type.name + ' token' + ('' if position is None else ' at position ' + repr(position)) + ('' if expected is None else ' (expected ' + ' or '.join(sorted(expected_token_type.name for expected_token_type in expected)) + ')'))
+        return SyntaxError('illegal ' + ('' if token.type is TokenType.illegal else token.type.name + ' ') + 'token' + ('' if position is None else ' at position ' + repr(position)) + ('' if expected is None else ' (expected ' + ' or '.join(sorted(expected_token_type.name for expected_token_type in expected)) + ')'))
 
 def json_to_tokens(json_value, allow_extension_types=False):
     if allow_extension_types and isinstance(json_value, tuple) and len(json_value) == 2:
@@ -144,6 +144,8 @@ def json_to_tokens(json_value, allow_extension_types=False):
             yield Token(TokenType.colon)
             yield from json_to_tokens(value)
         yield Token(TokenType.close_object)
+    elif isinstance(json_value, str):
+        yield Token(TokenType.string, text=json_value)
     else:
         yield Token(TokenType.illegal)
 
@@ -189,7 +191,7 @@ def parse(tokens):
     # atomic filters
     for i, token in reversed(list(enumerate(tokens))):
         if isinstance(token, Token) and token.type in atomic_tokens:
-            tokens[i] = atomic_tokens[token.type](text=token.text)
+            tokens[i] = atomic_tokens[token.type](token.text)
     
     if len(tokens) == 1 and isinstance(tokens[0], jqsh.filter.Filter):
         return tokens[0] # finished parsing
@@ -380,6 +382,18 @@ def tokenize(jqsh_string):
                         string_literal += rest_string[0]
                         string_content += escapes[rest_string[0]]
                         rest_string = rest_string[1:]
+                    elif rest_string[0] == 'u':
+                        try:
+                            escape_sequence = int(rest_string[1:5], 16)
+                        except (IndexError, ValueError):
+                            yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
+                            yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string, text=rest_string)
+                            whitespace_prefix = ''
+                            rest_string = ''
+                        else:
+                            string_literal += rest_string[:5]
+                            string_content += chr(escape_sequence) #TODO check for UTF-16 surrogate characters
+                            rest_string = rest_string[5:]
                     else:
                         yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
                         yield Token(TokenType.illegal, token_string=whitespace_prefix + '\\' + rest_string, text='\\' + rest_string)
@@ -390,6 +404,7 @@ def tokenize(jqsh_string):
                     string_content += rest_string[0]
                     rest_string = rest_string[1:]
             yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
+            whitespace_prefix = ''
         elif rest_string[0] == '#':
             rest_string = rest_string[1:]
             comment = ''
