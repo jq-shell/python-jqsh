@@ -120,27 +120,32 @@ class StringLiteral(Filter):
         return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(self.text) + ')'
     
     def __str__(self):
-        def escape(character):
-            if character == '\b':
-                return '\\b'
-            elif character == '\t':
-                return '\\t'
-            elif character == '\n':
-                return '\\n'
-            elif character == '\f':
-                return '\\f'
-            elif character == '\r':
-                return '\\r'
-            elif character == '"':
-                return '\\"'
-            elif character == '\\':
-                return '\\\\'
-            elif ord(character) <= 0x1f:
-                return '\\u{:04x}'.format(ord(character))
-            else:
-                return character
-        
-        return '"' + ''.join(escape(c) for c in self.name) + '"'
+        return '"' + ''.join(self.escape(c) for c in self.name) + '"'
+    
+    @staticmethod
+    def escape(character):
+        if character == '\b':
+            return '\\b'
+        elif character == '\t':
+            return '\\t'
+        elif character == '\n':
+            return '\\n'
+        elif character == '\f':
+            return '\\f'
+        elif character == '\r':
+            return '\\r'
+        elif character == '"':
+            return '\\"'
+        elif character == '\\':
+            return '\\\\'
+        elif ord(character) <= 0x1f:
+            return '\\u{:04x}'.format(ord(character))
+        else:
+            return character
+    
+    @staticmethod
+    def representation(the_string):
+        return '"' + ''.join(StringLiteral.escape(character) for character in str(the_string)) + '"'
     
     def run(self, input_channel):
         yield self.text

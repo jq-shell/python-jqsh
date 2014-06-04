@@ -110,42 +110,44 @@ def illegal_token_exception(token, position=None, expected=None):
     else:
         return SyntaxError('illegal ' + ('' if token.type is TokenType.illegal else token.type.name + ' ') + 'token' + ('' if position is None else ' at position ' + repr(position)) + ('' if expected is None else ' (expected ' + ' or '.join(sorted(expected_token_type.name for expected_token_type in expected)) + ')'))
 
-def json_to_tokens(json_value, allow_extension_types=False):
+def json_to_tokens(json_value, *, allow_extension_types=False, indent_level=0, indent_width=2):
+    single_indent = ' ' * indent_width
+    indent = single_indent * indent_level
     if allow_extension_types and isinstance(json_value, tuple) and len(json_value) == 2:
-        yield Token(TokenType.open_paren)
-        yield from json_to_tokens(json_value[0], allow_extension_types=True)
-        yield Token(TokenType.colon)
-        yield from json_to_tokens(json_value[1], allow_extension_types=True)
-        yield Token(TokenType.close_paren)
+        yield Token(TokenType.open_paren, token_string='(\n' + indent + single_indent)
+        yield from json_to_tokens(json_value[0], allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
+        yield Token(TokenType.colon, token_string=': ')
+        yield from json_to_tokens(json_value[1], allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
+        yield Token(TokenType.close_paren, token_string='\n' + indent + ')')
     elif json_value is False:
-        yield Token(TokenType.name, text='false')
+        yield Token(TokenType.name, token_string='false', text='false')
     elif json_value is None:
-        yield Token(TokenType.name, text='null')
+        yield Token(TokenType.name, token_string='null', text='null')
     elif allow_extension_types and isinstance(json_value, Exception):
-        yield Token(TokenType.name, text='raise')
-        yield Token(TokenType.string, text=str(json_value))
+        yield Token(TokenType.name, token_string='raise', text='raise')
+        yield Token(TokenType.string, token_string=' ' + jqsh.filter.StringLiteral.representation(json_value), text=str(json_value))
     elif json_value is True:
-        yield Token(TokenType.name, text='true')
+        yield Token(TokenType.name, token_string='true', text='true')
     elif isinstance(json_value, decimal.Decimal) or isinstance(json_value, int) or isinstance(json_value, float):
-        yield Token(TokenType.number, text=str(json_value))
+        yield Token(TokenType.number, token_string=str(json_value), text=str(json_value))
     elif isinstance(json_value, list):
-        yield Token(TokenType.open_array)
+        yield Token(TokenType.open_array, token_string=('[\n' + indent + single_indent if len(json_value) else '['))
         for i, item in enumerate(json_value):
             if i > 0:
-                yield Token(TokenType.comma)
-            yield from json_to_tokens(item)
-        yield Token(TokenType.close_array)
+                yield Token(TokenType.comma, token_string=',\n' + indent + single_indent)
+            yield from json_to_tokens(item, allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
+        yield Token(TokenType.close_array, token_string=('\n' + indent + ']' if len(json_value) else ']'))
     elif isinstance(json_value, dict):
-        yield Token(TokenType.open_object)
+        yield Token(TokenType.open_object, token_string=('{\n' + indent + single_indent if len(json_value) else '{'))
         for i, (key, value) in enumerate(sorted(json_value.items(), key=lambda pair: pair[0])): # sort the pairs of an object by their names
             if i > 0:
-                yield Token(TokenType.comma)
-            yield Token(TokenType.string, text=key)
-            yield Token(TokenType.colon)
-            yield from json_to_tokens(value)
-        yield Token(TokenType.close_object)
+                yield Token(TokenType.comma, token_string=',\n' + indent + single_indent)
+            yield Token(TokenType.string, token_string=jqsh.filter.StringLiteral.representation(key), text=key)
+            yield Token(TokenType.colon, token_string=': ')
+            yield from json_to_tokens(value, allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
+        yield Token(TokenType.close_object, token_string=('\n' + indent + '}' if len(json_value) else '}'))
     elif isinstance(json_value, str):
-        yield Token(TokenType.string, text=json_value)
+        yield Token(TokenType.string, token_string=jqsh.filter.StringLiteral.representation(json_value), text=json_value)
     else:
         yield Token(TokenType.illegal)
 
@@ -360,26 +362,31 @@ def tokenize(jqsh_string):
     if rest_string.startswith('\ufeff'):
         whitespace_prefix += rest_string[0]
         rest_string = rest_string[1:]
-    while len(rest_string):
-        if rest_string[0] in string.whitespace:
-            whitespace_prefix += rest_string[0]
-            rest_string = rest_string[1:]
-        elif rest_string[0] == '"':
-            rest_string = rest_string[1:]
-            token_type = TokenType.string_incomplete
-            string_literal = '"'
+    parens_stack = []
+    while len(parens_stack) and parens_stack[-1] < 0 or len(rest_string):
+        if len(parens_stack) and parens_stack[-1] < 0 or rest_string[0] == '"':
+            if len(parens_stack) and parens_stack[-1] < 0:
+                token_type = TokenType.string_end_incomplete
+                string_literal = ')'
+                parens_stack.pop()
+            else:
+                rest_string = rest_string[1:]
+                token_type = TokenType.string_incomplete
+                string_literal = '"'
             string_content = ''
             while len(rest_string):
                 if rest_string[0] == '"':
-                    token_type = TokenType.string
+                    token_type = {
+                        TokenType.string_end_incomplete: TokenType.string_end,
+                        TokenType.string_incomplete: TokenType.string
+                    }[token_type]
                     string_literal += '"'
                     rest_string = rest_string[1:]
                     break
                 elif rest_string[0] == '\\':
                     rest_string = rest_string[1:]
                     if rest_string[0] in escapes:
-                        string_literal += '\\'
-                        string_literal += rest_string[0]
+                        string_literal += '\\' + rest_string[0]
                         string_content += escapes[rest_string[0]]
                         rest_string = rest_string[1:]
                     elif rest_string[0] == 'u':
@@ -388,23 +395,33 @@ def tokenize(jqsh_string):
                         except (IndexError, ValueError):
                             yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
                             yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string, text=rest_string)
-                            whitespace_prefix = ''
-                            rest_string = ''
+                            return
                         else:
-                            string_literal += rest_string[:5]
+                            string_literal += '\\' + rest_string[:5]
                             string_content += chr(escape_sequence) #TODO check for UTF-16 surrogate characters
                             rest_string = rest_string[5:]
+                    elif rest_string[0] == '(':
+                        string_literal += '\\('
+                        parens_stack.append(0)
+                        token_type = {
+                            TokenType.string_end_incomplete: TokenType.string_middle,
+                            TokenType.string_incomplete: TokenType.string_start
+                        }[token_type]
+                        rest_string = rest_string[1:]
+                        break
                     else:
                         yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
                         yield Token(TokenType.illegal, token_string=whitespace_prefix + '\\' + rest_string, text='\\' + rest_string)
-                        whitespace_prefix = ''
-                        rest_string = ''
+                        return
                 else:
                     string_literal += rest_string[0]
                     string_content += rest_string[0]
                     rest_string = rest_string[1:]
             yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
             whitespace_prefix = ''
+        elif rest_string[0] in string.whitespace:
+            whitespace_prefix += rest_string[0]
+            rest_string = rest_string[1:]
         elif rest_string[0] == '#':
             rest_string = rest_string[1:]
             comment = ''
@@ -432,13 +449,18 @@ def tokenize(jqsh_string):
         elif any(rest_string.startswith(symbol) for symbol in symbols):
             for symbol, token_type in sorted(symbols.items(), key=lambda pair: -len(pair[0])): # look at longer symbols first, so that a += is not mistakenly tokenized as a +
                 if rest_string.startswith(symbol):
-                    yield Token(token_type, token_string=whitespace_prefix + rest_string[:len(symbol)])
-                    whitespace_prefix = ''
+                    if len(parens_stack):
+                        if token_type is TokenType.open_paren:
+                            parens_stack[-1] += 1
+                        elif token_type is TokenType.close_paren:
+                            parens_stack[-1] -= 1
+                    if len(parens_stack) == 0 or parens_stack[-1] >= 0:
+                        yield Token(token_type, token_string=whitespace_prefix + rest_string[:len(symbol)])
+                        whitespace_prefix = ''
                     rest_string = rest_string[len(symbol):]
                     break
         else:
             yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string, text=rest_string)
-            whitespace_prefix = ''
-            rest_string = ''
+            return
     if len(whitespace_prefix):
         yield Token(TokenType.trailing_whitespace, token_string=whitespace_prefix)

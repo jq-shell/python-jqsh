@@ -2,7 +2,7 @@ import sys
 
 import jqsh
 import jqsh.filter
-import json
+import jqsh.parser
 
 def print_output(filter_thread, output_file=None):
     if output_file is None:
@@ -10,9 +10,22 @@ def print_output(filter_thread, output_file=None):
     if isinstance(filter_thread, jqsh.filter.Filter):
         filter_thread = jqsh.filter.FilterThread(filter_thread)
     filter_thread.start()
-    for value in filter_thread.output_channel:
-        if isinstance(value, Exception):
-            print('jqsh: uncaught exception: ' + str(value), file=output_file, flush=True)
+    has_tokens = False
+    while True:
+        try:
+            token = filter_thread.output_channel.pop()
+        except StopIteration:
+            if has_tokens:
+                print(file=output_file, flush=True) # add a newline
+            break
+        has_tokens = True
+        if token.type is jqsh.parser.TokenType.name and token.text == 'raise':
+            print('\rjqsh: uncaught exception:', end=' ', file=output_file, flush=True)
+            print(filter_thread.output_channel.pop().text, file=output_file, flush=True)
+            break
         else:
-            json.dump(value, output_file, sort_keys=True, indent=2)
-            print(file=output_file, flush=True) # add a newline because json.dump doesn't end its values with newlines
+            print(syntax_highlight(token), end='', file=output_file, flush=True)
+
+def syntax_highlight(token):
+    #TODO add actual highlighting
+    return str(token)

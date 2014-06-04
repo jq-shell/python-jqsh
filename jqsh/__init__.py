@@ -5,6 +5,7 @@ import jqsh.parser
 
 __all__ = [
     'channel',
+    'cli',
     'filter',
     'functions',
     'parser'
