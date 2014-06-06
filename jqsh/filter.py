@@ -4,6 +4,9 @@ import jqsh.channel
 import jqsh.functions
 import threading
 
+class NotAllowed(Exception):
+    pass
+
 class FilterThread(threading.Thread):
     def __init__(self, the_filter, input_channel=None):
         super().__init__(name='jqsh FilterThread')

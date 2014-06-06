@@ -36,10 +36,12 @@ class Token:
     def __eq__(self, other):
         return self.type is other.type and self.text == other.text
     
-    def __init__(self, token_type, token_string=None, text=None):
+    def __init__(self, token_type, token_string=None, text=None, line=None, column=None):
         self.type = token_type
         self.string = token_string # ''.join(token.string for token in tokenize(jqsh_string)) == jqsh_string
         self.text = text # metadata like the name of a name token or the digits of a number literal. None for simple tokens
+        self.line = line
+        self.column = column
     
     def __repr__(self):
         return 'jqsh.parser.Token(' + repr(self.type) + ('' if self.string is None else ', token_string=' + repr(self.string)) + ('' if self.text is None else ', text=' + repr(self.text)) + ')'
@@ -104,11 +106,11 @@ symbols = {
     '}': TokenType.close_object
 }
 
-def illegal_token_exception(token, position=None, expected=None):
+def illegal_token_exception(token, position=None, expected=None, line_numbers=False):
     if token.type is TokenType.illegal and token.text:
-        return SyntaxError('illegal character' + ('' if position is None else ' at position ' + repr(position)) + ': ' + repr(token.text[0]) + ' (U+' + format(ord(token.text[0]), 'x').upper() + ' ' + unicodedata.name(token.text[0], 'unknown character') + ')')
+        return SyntaxError('illegal character' + ((' in line ' + str(token.line) if line_numbers and token.line is not None else '') if position is None else ' at position ' + repr(position)) + ': ' + repr(token.text[0]) + ' (U+' + format(ord(token.text[0]), 'x').upper() + ' ' + unicodedata.name(token.text[0], 'unknown character') + ')')
     else:
-        return SyntaxError('illegal ' + ('' if token.type is TokenType.illegal else token.type.name + ' ') + 'token' + ('' if position is None else ' at position ' + repr(position)) + ('' if expected is None else ' (expected ' + ' or '.join(sorted(expected_token_type.name for expected_token_type in expected)) + ')'))
+        return SyntaxError('illegal ' + ('' if token.type is TokenType.illegal else token.type.name + ' ') + 'token' + ((' in line ' + str(token.line) if line_numbers and token.line is not None else '') if position is None else ' at position ' + repr(position)) + ('' if expected is None else ' (expected ' + ' or '.join(sorted(expected_token_type.name for expected_token_type in expected)) + ')'))
 
 def json_to_tokens(json_value, *, allow_extension_types=False, indent_level=0, indent_width=2):
     single_indent = ' ' * indent_width
@@ -151,18 +153,41 @@ def json_to_tokens(json_value, *, allow_extension_types=False, indent_level=0, i
     else:
         yield Token(TokenType.illegal)
 
-def parse(tokens):
+def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}):
+    def filter_is_allowed(the_filter):
+        if isinstance(allowed_filters, dict):
+            if the_filter.__class__ in allowed_filters:
+                if isinstance(allowed_filters[the_filter.__class__], bool):
+                    return allowed_filters[the_filter.__class__]
+                else:
+                    return allowed_filters[the_filter.__class__](the_filter)
+            else:
+                if isinstance(allowed_filters.get('default', False), bool):
+                    return allowed_filters.get('default', False)
+                else:
+                    return allowed_filters['default'](the_filter)
+        elif the_filter.__class__ in allowed_filters:
+            return True
+        else:
+            return False
+    
+    def raise_for_filter(the_filter):
+        if filter_is_allowed(the_filter):
+            return the_filter
+        else:
+            raise jqsh.filter.NotAllowed('disallowed filter: ' + str(the_filter))
+    
     if isinstance(tokens, str):
         tokens = list(tokenize(tokens))
     tokens = [token for token in tokens if isinstance(token, jqsh.filter.Filter) or token.type is not TokenType.comment]
     if not len(tokens):
-        return jqsh.filter.Filter() # token list is empty, return an empty filter
+        return raise_for_filter(jqsh.filter.Filter()) # token list is empty, return an empty filter
     for token in tokens:
         if token.type is TokenType.illegal:
-            raise illegal_token_exception(token)
+            raise illegal_token_exception(token, line_numbers=line_numbers)
     if isinstance(tokens[-1], Token) and tokens[-1].type is TokenType.trailing_whitespace:
         if len(tokens) == 1:
-            return jqsh.filter.Filter() # token list consists entirely of whitespace, return an empty filter
+            return raise_for_filter(jqsh.filter.Filter()) # token list consists entirely of whitespace, return an empty filter
         else:
             tokens[-2].string += tokens[-1].string # merge the trailing whitespace into the second-to-last token
             tokens.pop() # remove the trailing_whitespace token
@@ -183,7 +208,7 @@ def parse(tokens):
                 raise Incomplete('too many opening parens of type ' + repr(token.type))
             elif paren_balance == 0:
                 if matching_parens[token.type] is tokens[paren_start].type:
-                    tokens[i:paren_start + 1] = [paren_filters[token.type](attribute=parse(tokens[i + 1:paren_start]))] # parse the inside of the parens
+                    tokens[i:paren_start + 1] = [raise_for_filter(paren_filters[token.type](attribute=parse(tokens[i + 1:paren_start], line_numbers=line_numbers, allowed_filters=allowed_filters)))] # parse the inside of the parens
                 else:
                     raise SyntaxError('opening paren of type ' + repr(token.type) + ' does not match closing paren of type ' + repr(tokens[paren_start].type))
                 paren_start = None
@@ -193,7 +218,7 @@ def parse(tokens):
     # atomic filters
     for i, token in reversed(list(enumerate(tokens))):
         if isinstance(token, Token) and token.type in atomic_tokens:
-            tokens[i] = atomic_tokens[token.type](token.text)
+            tokens[i] = raise_for_filter(atomic_tokens[token.type](token.text))
     
     if len(tokens) == 1 and isinstance(tokens[0], jqsh.filter.Filter):
         return tokens[0] # finished parsing
@@ -355,6 +380,17 @@ def set_value_at_key_path(structure, key_path, value):
         return value
 
 def tokenize(jqsh_string):
+    def shift(rest_string, line, column, amount=1):
+        for _ in range(amount):
+            removed_character = rest_string[0]
+            rest_string = rest_string[1:]
+            if removed_character == '\n':
+                line += 1
+                column = 0
+            else:
+                column += 1
+        return rest_string, line, column
+    
     rest_string = jqsh_string
     if not isinstance(rest_string, str):
         rest_string = rest_string.decode('utf-8')
@@ -362,6 +398,8 @@ def tokenize(jqsh_string):
     if rest_string.startswith('\ufeff'):
         whitespace_prefix += rest_string[0]
         rest_string = rest_string[1:]
+    line = 1
+    column = 0
     parens_stack = []
     while len(parens_stack) and parens_stack[-1] < 0 or len(rest_string):
         if len(parens_stack) and parens_stack[-1] < 0 or rest_string[0] == '"':
@@ -369,10 +407,14 @@ def tokenize(jqsh_string):
                 token_type = TokenType.string_end_incomplete
                 string_literal = ')'
                 parens_stack.pop()
+                string_start_line = line
+                string_start_column = column - 1
             else:
-                rest_string = rest_string[1:]
+                rest_string, line, column = shift(rest_string, line, column)
                 token_type = TokenType.string_incomplete
                 string_literal = '"'
+                string_start_line = line
+                string_start_column = column
             string_content = ''
             while len(rest_string):
                 if rest_string[0] == '"':
@@ -381,25 +423,25 @@ def tokenize(jqsh_string):
                         TokenType.string_incomplete: TokenType.string
                     }[token_type]
                     string_literal += '"'
-                    rest_string = rest_string[1:]
+                    rest_string, line, column = shift(rest_string, line, column)
                     break
                 elif rest_string[0] == '\\':
-                    rest_string = rest_string[1:]
+                    rest_string, line, column = shift(rest_string, line, column)
                     if rest_string[0] in escapes:
                         string_literal += '\\' + rest_string[0]
                         string_content += escapes[rest_string[0]]
-                        rest_string = rest_string[1:]
+                        rest_string, line, column = shift(rest_string, line, column)
                     elif rest_string[0] == 'u':
                         try:
                             escape_sequence = int(rest_string[1:5], 16)
                         except (IndexError, ValueError):
-                            yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
-                            yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string, text=rest_string)
+                            yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content, line=string_start_line, column=string_start_column)
+                            yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string, text=rest_string, line=line, column=column)
                             return
                         else:
                             string_literal += '\\' + rest_string[:5]
                             string_content += chr(escape_sequence) #TODO check for UTF-16 surrogate characters
-                            rest_string = rest_string[5:]
+                            rest_string, line, column = shift(rest_string, line, column, amount=5)
                     elif rest_string[0] == '(':
                         string_literal += '\\('
                         parens_stack.append(0)
@@ -407,44 +449,50 @@ def tokenize(jqsh_string):
                             TokenType.string_end_incomplete: TokenType.string_middle,
                             TokenType.string_incomplete: TokenType.string_start
                         }[token_type]
-                        rest_string = rest_string[1:]
+                        rest_string, line, column = shift(rest_string, line, column)
                         break
                     else:
-                        yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
-                        yield Token(TokenType.illegal, token_string=whitespace_prefix + '\\' + rest_string, text='\\' + rest_string)
+                        yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content, line=string_start_line, column=string_start_column)
+                        yield Token(TokenType.illegal, token_string=whitespace_prefix + '\\' + rest_string, text='\\' + rest_string, line=line, column=column)
                         return
                 else:
                     string_literal += rest_string[0]
                     string_content += rest_string[0]
-                    rest_string = rest_string[1:]
-            yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content)
+                    rest_string, line, column = shift(rest_string, line, column)
+            yield Token(token_type, token_string=whitespace_prefix + string_literal, text=string_content, line=string_start_line, column=string_start_column)
             whitespace_prefix = ''
         elif rest_string[0] in string.whitespace:
             whitespace_prefix += rest_string[0]
-            rest_string = rest_string[1:]
+            rest_string, line, column = shift(rest_string, line, column)
         elif rest_string[0] == '#':
-            rest_string = rest_string[1:]
+            comment_start_line = line
+            comment_start_column = column
+            rest_string, line, column = shift(rest_string, line, column)
             comment = ''
             while len(rest_string):
                 if rest_string[0] == '\n':
                     break
                 comment += rest_string[0]
-                rest_string = rest_string[1:]
-            yield Token(TokenType.comment, token_string=whitespace_prefix + '#' + comment, text=comment)
+                rest_string, line, column = shift(rest_string, line, column)
+            yield Token(TokenType.comment, token_string=whitespace_prefix + '#' + comment, text=comment, line=comment_start_line, column=comment_start_column)
             whitespace_prefix = ''
         elif rest_string[0] in string.ascii_letters:
+            name_start_line = line
+            name_start_column = column
             name = ''
             while len(rest_string) and rest_string[0] in string.ascii_letters:
                 name += rest_string[0]
-                rest_string = rest_string[1:]
-            yield Token(TokenType.name, token_string=whitespace_prefix + name, text=name)
+                rest_string, line, column = shift(rest_string, line, column)
+            yield Token(TokenType.name, token_string=whitespace_prefix + name, text=name, line=name_start_line, column=name_start_column)
             whitespace_prefix = ''
         elif rest_string[0] in string.digits:
+            number_start_line = line
+            number_start_column = column
             number = ''
             while len(rest_string) and rest_string[0] in string.digits:
                 number += rest_string[0]
-                rest_string = rest_string[1:]
-            yield Token(TokenType.number, token_string=whitespace_prefix + number, text=number)
+                rest_string, line, column = shift(rest_string, line, column)
+            yield Token(TokenType.number, token_string=whitespace_prefix + number, text=number, line=number_start_line, column=number_start_column)
             whitespace_prefix = ''
         elif any(rest_string.startswith(symbol) for symbol in symbols):
             for symbol, token_type in sorted(symbols.items(), key=lambda pair: -len(pair[0])): # look at longer symbols first, so that a += is not mistakenly tokenized as a +
@@ -455,12 +503,12 @@ def tokenize(jqsh_string):
                         elif token_type is TokenType.close_paren:
                             parens_stack[-1] -= 1
                     if len(parens_stack) == 0 or parens_stack[-1] >= 0:
-                        yield Token(token_type, token_string=whitespace_prefix + rest_string[:len(symbol)])
+                        yield Token(token_type, token_string=whitespace_prefix + rest_string[:len(symbol)], line=line, column=column)
                         whitespace_prefix = ''
-                    rest_string = rest_string[len(symbol):]
+                    rest_string, line, column = shift(rest_string, line, column, amount=len(symbol))
                     break
         else:
-            yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string, text=rest_string)
+            yield Token(TokenType.illegal, token_string=whitespace_prefix + rest_string, text=rest_string, line=line, column=column)
             return
     if len(whitespace_prefix):
         yield Token(TokenType.trailing_whitespace, token_string=whitespace_prefix)
