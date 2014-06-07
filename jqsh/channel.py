@@ -44,6 +44,43 @@ class Channel:
                 except jqsh.parser.Incomplete:
                     continue
     
+    def __truediv__(self, other):
+        """Splits the channel into multiple channels:
+        
+        All values that have not yet been read from this channel, and any values that are added later, will be copied into the other channels.
+        The original channel will appear to be terminated immediately, and the split channels will terminate when the original channel is actually terminated.
+        The split channels are returned as a tuple.
+        """
+        def spread_values(split_channels):
+            while True:
+                token = self.values.get()
+                if isinstance(token, Terminator):
+                    for chan in split_channels:
+                        chan.terminate()
+                    break
+                for chan in split_channels:
+                    chan.push(token)
+        
+        try:
+            other = int(other)
+        except:
+            return NotImplemented
+        buffered_tokens = []
+        with self.output_lock:
+            if self.terminated:
+                return tuple([Channel(terminated=True)] * other)
+            self.terminated = True
+            self.values.put(Terminator())
+            while True:
+                token = self.values.get()
+                if isinstance(token, Terminator):
+                    break
+                else:
+                    buffered_tokens.append(token)
+        ret = [Channel(*buffered_tokens) for _ in range(other)]
+        threading.Thread(target=spread_values, args=(ret,)).start()
+        return tuple(ret)
+    
     def pop(self, wait=True):
         """Returns a token. Raises queue.Empty if no element is currently available, and StopIteration if the channel is terminated."""
         with self.output_lock:

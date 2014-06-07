@@ -10,15 +10,11 @@ def print_output(filter_thread, output_file=None):
     if isinstance(filter_thread, jqsh.filter.Filter):
         filter_thread = jqsh.filter.FilterThread(filter_thread)
     filter_thread.start()
-    has_tokens = False
     while True:
         try:
             token = filter_thread.output_channel.pop()
         except StopIteration:
-            if has_tokens:
-                print(file=output_file, flush=True) # add a newline
             break
-        has_tokens = True
         if token.type is jqsh.parser.TokenType.name and token.text == 'raise':
             print('\rjqsh: uncaught exception:', end=' ', file=output_file, flush=True)
             print(filter_thread.output_channel.pop().text, file=output_file, flush=True)

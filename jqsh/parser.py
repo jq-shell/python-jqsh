@@ -9,20 +9,28 @@ class Incomplete(Exception):
     pass
 
 TokenType = enum.Enum('TokenType', [
+    'assign',
     'close_array',
     'close_object',
     'close_paren',
     'colon',
     'comma',
+    'command',
     'comment',
     'dot',
+    'format_string',
+    'global_variable',
     'illegal',
     'minus',
+    'modulo',
     'name',
     'number',
     'open_array',
     'open_object',
     'open_paren',
+    'pipe',
+    'plus',
+    'semicolon',
     'string',
     'string_end',
     'string_end_incomplete',
@@ -88,21 +96,42 @@ matching_parens = { # a dictionary that maps opening parenthesis-like tokens (pa
     TokenType.open_paren: TokenType.close_paren
 }
 
+operators = [
+    {
+        TokenType.dot: jqsh.filter.Apply
+    },
+    {
+        TokenType.comma: jqsh.filter.Comma
+    },
+    {
+        'rtl': True,
+        TokenType.pipe: jqsh.filter.Pipe
+    }
+]
+
 paren_filters = {
     TokenType.open_array: jqsh.filter.Array,
     TokenType.open_paren: jqsh.filter.Parens
 }
 
 symbols = {
+    '!': TokenType.command,
+    '$': TokenType.global_variable,
+    '%': TokenType.modulo,
     '(': TokenType.open_paren,
     ')': TokenType.close_paren,
+    '+': TokenType.plus,
     ',': TokenType.comma,
     '-': TokenType.minus,
     '.': TokenType.dot,
     ':': TokenType.colon,
+    ';': TokenType.semicolon,
+    '=': TokenType.assign,
+    '@': TokenType.format_string,
     '[': TokenType.open_array,
     ']': TokenType.close_array,
     '{': TokenType.open_object,
+    '|': TokenType.pipe,
     '}': TokenType.close_object
 }
 
@@ -120,25 +149,25 @@ def json_to_tokens(json_value, *, allow_extension_types=False, indent_level=0, i
         yield from json_to_tokens(json_value[0], allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
         yield Token(TokenType.colon, token_string=': ')
         yield from json_to_tokens(json_value[1], allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
-        yield Token(TokenType.close_paren, token_string='\n' + indent + ')')
+        yield Token(TokenType.close_paren, token_string='\n' + indent + ')' + ('\n' if indent_level == 0 else ''))
     elif json_value is False:
-        yield Token(TokenType.name, token_string='false', text='false')
+        yield Token(TokenType.name, token_string='false' + ('\n' if indent_level == 0 else ''), text='false')
     elif json_value is None:
-        yield Token(TokenType.name, token_string='null', text='null')
+        yield Token(TokenType.name, token_string='null' + ('\n' if indent_level == 0 else ''), text='null')
     elif allow_extension_types and isinstance(json_value, Exception):
         yield Token(TokenType.name, token_string='raise', text='raise')
-        yield Token(TokenType.string, token_string=' ' + jqsh.filter.StringLiteral.representation(json_value), text=str(json_value))
+        yield Token(TokenType.string, token_string=' ' + jqsh.filter.StringLiteral.representation(json_value) + ('\n' if indent_level == 0 else ''), text=str(json_value))
     elif json_value is True:
-        yield Token(TokenType.name, token_string='true', text='true')
+        yield Token(TokenType.name, token_string='true' + ('\n' if indent_level == 0 else ''), text='true')
     elif isinstance(json_value, decimal.Decimal) or isinstance(json_value, int) or isinstance(json_value, float):
-        yield Token(TokenType.number, token_string=str(json_value), text=str(json_value))
+        yield Token(TokenType.number, token_string=str(json_value) + ('\n' if indent_level == 0 else ''), text=str(json_value))
     elif isinstance(json_value, list):
         yield Token(TokenType.open_array, token_string=('[\n' + indent + single_indent if len(json_value) else '['))
         for i, item in enumerate(json_value):
             if i > 0:
                 yield Token(TokenType.comma, token_string=',\n' + indent + single_indent)
             yield from json_to_tokens(item, allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
-        yield Token(TokenType.close_array, token_string=('\n' + indent + ']' if len(json_value) else ']'))
+        yield Token(TokenType.close_array, token_string=('\n' + indent + ']' if len(json_value) else ']') + ('\n' if indent_level == 0 else ''))
     elif isinstance(json_value, dict):
         yield Token(TokenType.open_object, token_string=('{\n' + indent + single_indent if len(json_value) else '{'))
         for i, (key, value) in enumerate(sorted(json_value.items(), key=lambda pair: pair[0])): # sort the pairs of an object by their names
@@ -147,9 +176,9 @@ def json_to_tokens(json_value, *, allow_extension_types=False, indent_level=0, i
             yield Token(TokenType.string, token_string=jqsh.filter.StringLiteral.representation(key), text=key)
             yield Token(TokenType.colon, token_string=': ')
             yield from json_to_tokens(value, allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
-        yield Token(TokenType.close_object, token_string=('\n' + indent + '}' if len(json_value) else '}'))
+        yield Token(TokenType.close_object, token_string=('\n' + indent + '}' if len(json_value) else '}') + ('\n' if indent_level == 0 else ''))
     elif isinstance(json_value, str):
-        yield Token(TokenType.string, token_string=jqsh.filter.StringLiteral.representation(json_value), text=json_value)
+        yield Token(TokenType.string, token_string=jqsh.filter.StringLiteral.representation(json_value) + ('\n' if indent_level == 0 else ''), text=json_value)
     else:
         yield Token(TokenType.illegal)
 
@@ -219,6 +248,47 @@ def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}):
     for i, token in reversed(list(enumerate(tokens))):
         if isinstance(token, Token) and token.type in atomic_tokens:
             tokens[i] = raise_for_filter(atomic_tokens[token.type](token.text))
+    
+    # variadic apply
+    start = None
+    for i, token in reversed(list(enumerate(tokens))):
+        if isinstance(token, jqsh.filter.Filter):
+            if start is None:
+                start = i
+        else:
+            if start is not None and start > i + 1:
+                tokens[i + 1:start + 1] = [raise_for_filter(jqsh.filter.Apply(*tokens[i + 1:start + 1]))]
+            start = None
+    if start is not None and start > 0:
+        tokens[:start + 1] = [raise_for_filter(jqsh.filter.Apply(*tokens[:start + 1]))]
+    
+    # operators
+    for precedence_group in operators:
+        ltr = not precedence_group.get('rtl', False)
+        if ltr:
+            tokens.reverse()
+        left_operand = None
+        right_operand = None
+        has_previous_operand = False
+        has_next_operand = False
+        for i, token in reversed(list(enumerate(tokens))):
+            if isinstance(token, jqsh.filter.Filter) and has_next_operand:
+                tokens[i:i + (3 if has_previous_operand else 2)] = [precedence_group[tokens[i + 1].type](left=left_operand, right=right_operand)]
+                has_next_operand = False
+            elif isinstance(token, Token) and token.type in precedence_group:
+                left_operand, has_left_operand = (tokens[i - 1], True) if i > 0 and isinstance(tokens[i - 1], jqsh.filter.Filter) else (raise_for_filter(jqsh.filter.Filter()), False)
+                right_operand, has_right_operand = (tokens[i + 1], True) if i + 1 < len(tokens) and isinstance(tokens[i + 1], jqsh.filter.Filter) else (raise_for_filter(jqsh.filter.Filter()), False)
+                has_previous_operand = has_right_operand
+                has_next_operand = has_left_operand
+                if ltr:
+                    left_operand, right_operand = right_operand, left_operand
+                    has_left_operand, has_right_operand = has_right_operand, has_left_operand
+                if not has_next_operand:
+                    tokens[i:i + (2 if has_previous_operand else 1)] = [precedence_group[token.type](left=left_operand, right=right_operand)]
+            else:
+                has_next_operand = False
+        if ltr:
+            tokens.reverse()
     
     if len(tokens) == 1 and isinstance(tokens[0], jqsh.filter.Filter):
         return tokens[0] # finished parsing

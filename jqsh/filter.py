@@ -152,3 +152,55 @@ class StringLiteral(Filter):
     
     def run(self, input_channel):
         yield self.text
+
+class Operator(Filter):
+    """Abstract base class for operator filters."""
+    
+    def __init__(self, *, left=Filter(), right=Filter()):
+        self.left_operand = left
+        self.right_operand = right
+    
+    def __repr__(self):
+        return 'jqsh.filter.' + self.__class__.__name__ + '(' + ('' if self.left_operand.__class__ == Filter else 'left=' + repr(self.left_operand) + ('' if self.right_operand.__class__ == Filter else ', ')) + ('' if self.right_operand.__class__ == Filter else 'right=' + repr(self.right_operand)) + ')'
+
+class Pipe(Operator):
+    def __str__(self):
+        return str(self.left_operand) + ' | ' + str(self.right_operand)
+    
+    def run(self, input_channel):
+        left_output = self.left_operand.start(input_channel)
+        yield from self.right_operand.start(left_output)
+
+class Apply(Operator):
+    def __init__(self, *attributes, left=Filter(), right=Filter()):
+        if len(attributes):
+            self.attributes = attributes
+            self.variadic_form = True
+        else:
+            self.attributes = [left, right]
+            self.variadic_form = False
+    
+    def __repr__(self):
+        if self.variadic_form:
+            return 'jqsh.filter.' + self.__class__.__name__ + '(' + ', '.join(repr(attribute) for attribute in self.attributes) + ')'
+        else:
+            return 'jqsh.filter.' + self.__class__.__name__ + '(' + ('' if self.attributes[0].__class__ == Filter else 'left=' + repr(self.attributes[0]) + ('' if self.attributes[1].__class__ == Filter else ', ')) + ('' if self.attributes[1].__class__ == Filter else 'right=' + repr(self.attributes[1])) + ')'
+    
+    def __str__(self):
+        if self.variadic_form:
+            return ' '.join(str(attribute) for attribute in self.attributes)
+        else:
+            return str(self.attributes[0]) + '.' + str(self.attributes[1])
+    
+    def run(self, input_channel):
+        pass #TODO
+
+class Comma(Operator):
+    def __str__(self):
+        return str(self.left_operand) + ', ' + str(self.right_operand)
+    
+    def run(self, input_channel):
+        left_input, right_input = input_channel / 2
+        right_output = self.right_operand.start(right_input)
+        yield from self.left_operand.start(left_input)
+        yield from right_output
