@@ -1,4 +1,5 @@
 import jqsh
+import jqsh.filter
 import jqsh.parser
 import queue
 import threading
@@ -99,6 +100,9 @@ class Channel:
                     buffered_tokens.append(token)
         ret = [Channel(*buffered_tokens) for _ in range(other)]
         threading.Thread(target=spread_values, args=(ret,)).start()
+        threading.Thread(target=jqsh.filter.Filter.handle_namespace, kwargs={'namespace_name': 'global_namespace', 'input_channel': self, 'output_channels': ret}).start()
+        threading.Thread(target=jqsh.filter.Filter.handle_namespace, kwargs={'namespace_name': 'local_namespace', 'input_channel': self, 'output_channels': ret}).start()
+        threading.Thread(target=jqsh.filter.Filter.handle_namespace, kwargs={'namespace_name': 'format_strings', 'input_channel': self, 'output_channels': ret}).start()
         return tuple(ret)
     
     @property
