@@ -37,10 +37,13 @@ class Filter:
     def run_raw(self, input_channel, output_channel):
         """This is called from the filter thread, and may be overridden by subclasses instead of run."""
         def run_thread(bridge):
-            for value in self.run(input_channel=bridge):
-                output_channel.push(value)
-                if isinstance(value, Exception):
-                    break
+            try:
+                for value in self.run(input_channel=bridge):
+                    output_channel.push(value)
+                    if isinstance(value, Exception):
+                        break
+            except:
+                output_channel.push(Exception('internal'))
         
         bridge_channel = jqsh.channel.Channel()
         helper_thread = threading.Thread(target=run_thread, kwargs={'bridge': bridge_channel})
@@ -104,13 +107,14 @@ class Name(Filter):
 
 class NumberLiteral(Filter):
     def __init__(self, number):
+        self.number_string = str(number)
         self.number = number if isinstance(number, decimal.Decimal) else decimal.Decimal(number)
     
     def __repr__(self):
-        return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(str(self.number)) + ')'
+        return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(self.number_string) + ')'
     
     def __str__(self):
-        return str(self.number)
+        return self.number_string
     
     def run(self, input_channel):
         yield decimal.Decimal(self.number)
@@ -193,7 +197,13 @@ class Apply(Operator):
             return str(self.attributes[0]) + '.' + str(self.attributes[1])
     
     def run(self, input_channel):
-        pass #TODO
+        if all(attribute.__class__ == Filter for attribute in self.attributes):
+            yield from input_channel
+        elif len(self.attributes) == 2 and all(attribute.__class__ == NumberLiteral for attribute in self.attributes):
+            yield decimal.Decimal(str(self.attributes[0]) + '.' + str(self.attributes[1]))
+        else:
+            yield Exception('notImplemented')
+            
 
 class Comma(Operator):
     def __str__(self):
