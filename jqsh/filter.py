@@ -2,6 +2,7 @@ import decimal
 import jqsh
 import jqsh.channel
 import jqsh.functions
+import subprocess
 import threading
 
 class NotAllowed(Exception):
@@ -26,6 +27,13 @@ class Filter:
         """The filter's representation in jqsh."""
         return ''
     
+    @staticmethod
+    def handle_namespace(namespace_name, input_channel, output_channels):
+        """Waits until the namespace is available in the input channel, then passes it unchanged to the output channels. Used by run_raw."""
+        namespace_value = getattr(input_channel, namespace_name)
+        for chan in output_channels:
+            setattr(chan, namespace_name, namespace_value)
+    
     def run(self, input_channel):
         """This is called from run_raw, and should be overridden by subclasses.
         
@@ -47,7 +55,13 @@ class Filter:
         
         bridge_channel = jqsh.channel.Channel()
         helper_thread = threading.Thread(target=run_thread, kwargs={'bridge': bridge_channel})
+        handle_globals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'global_namespace', 'input_channel': input_channel, 'output_channels': [bridge_channel, output_channel]})
+        handle_locals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'local_namespace', 'input_channel': input_channel, 'output_channels': [bridge_channel, output_channel]})
+        handle_format_strings = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'format_strings', 'input_channel': input_channel, 'output_channels': [bridge_channel, output_channel]})
         helper_thread.start()
+        handle_globals.start()
+        handle_locals.start()
+        handle_format_strings.start()
         while True:
             try:
                 token = input_channel.pop()
@@ -59,6 +73,9 @@ class Filter:
                 break
         bridge_channel.terminate()
         helper_thread.join()
+        handle_globals.join()
+        handle_locals.join()
+        handle_format_strings.join()
         output_channel.terminate()
     
     def start(self, input_channel=None):
@@ -127,7 +144,7 @@ class StringLiteral(Filter):
         return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(self.text) + ')'
     
     def __str__(self):
-        return '"' + ''.join(self.escape(c) for c in self.name) + '"'
+        return '"' + ''.join(self.escape(c) for c in self.text) + '"'
     
     @staticmethod
     def escape(character):
@@ -166,16 +183,20 @@ class Operator(Filter):
     
     def __repr__(self):
         return 'jqsh.filter.' + self.__class__.__name__ + '(' + ('' if self.left_operand.__class__ == Filter else 'left=' + repr(self.left_operand) + ('' if self.right_operand.__class__ == Filter else ', ')) + ('' if self.right_operand.__class__ == Filter else 'right=' + repr(self.right_operand)) + ')'
+    
+    def __str__(self):
+        return str(self.left_operand) + self.operator_string + str(self.right_operand)
 
 class Pipe(Operator):
-    def __str__(self):
-        return str(self.left_operand) + ' | ' + str(self.right_operand)
+    operator_string = ' | '
     
     def run(self, input_channel):
         left_output = self.left_operand.start(input_channel)
         yield from self.right_operand.start(left_output)
 
 class Apply(Operator):
+    operator_string = '.'
+    
     def __init__(self, *attributes, left=Filter(), right=Filter()):
         if len(attributes):
             self.attributes = attributes
@@ -203,7 +224,6 @@ class Apply(Operator):
             yield decimal.Decimal(str(self.attributes[0]) + '.' + str(self.attributes[1]))
         else:
             yield Exception('notImplemented')
-            
 
 class Comma(Operator):
     def __str__(self):
@@ -214,3 +234,53 @@ class Comma(Operator):
         right_output = self.right_operand.start(right_input)
         yield from self.left_operand.start(left_input)
         yield from right_output
+
+class UnaryOperator(Filter):
+    """Abstract base class for unary-only operator filters."""
+    
+    def __init__(self, attribute):
+        self.attribute = attribute
+    
+    def __repr__(self):
+        return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(self.attribute) + ')'
+    
+    def __str__(self):
+        return self.operator_string + str(self.attribute)
+
+class Command(UnaryOperator):
+    operator_string = '!'
+    
+    def run(self):
+        yield Exception('notImplemented') #TODO
+
+class GlobalVariable(UnaryOperator):
+    operator_string = '$'
+    
+    def run_raw(self, input_channel, output_channel):
+        handle_globals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'global_namespace', 'input_channel': input_channel, 'output_channels': [output_channel]})
+        handle_locals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'local_namespace', 'input_channel': input_channel, 'output_channels': [output_channel]})
+        handle_format_strings = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'format_strings', 'input_channel': input_channel, 'output_channels': [output_channel]})
+        handle_globals.start()
+        handle_locals.start()
+        handle_format_strings.start()
+        if self.attribute.__class__ == Name:
+            variable_name = self.attribute.name
+        else:
+            try:
+                variable_name = next(self.attribute.start(input_channel))
+            except StopIteration:
+                output_channel.push(Exception('empty'))
+                variable_name = None
+            if not isinstance(variable_name, str):
+                output_channel.push(Exception('type'))
+                variable_name = None
+        if variable_name is not None:
+            if variable_name in input_channel.global_namespace:
+                for value in input_channel.global_namespace[variable_name]:
+                    output_channel.push(value)
+            else:
+                output_channel.push(Exception('name'))
+        output_channel.terminate()
+        handle_globals.join()
+        handle_locals.join()
+        handle_format_strings.join()

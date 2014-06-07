@@ -7,11 +7,31 @@ class Terminator:
     """a special value used to signal the end of a channel"""
 
 class Channel:
-    def __init__(self, *args, terminated=False):
+    def __init__(self, *args, global_namespace=None, local_namespace=None, format_strings=None, terminated=False, empty_namespaces=None):
         self.input_lock = threading.Lock()
         self.input_terminated = False # has the terminator been pushed?
         self.output_lock = threading.Lock()
         self.terminated = False # has the terminator been popped?
+        # namespaces
+        if empty_namespaces is None:
+            empty_namespaces = terminated
+        if empty_namespaces:
+            global_namespace = {}
+            local_namespace = {}
+            format_strings = {}
+        self._globals = None
+        self._locals = None
+        self._format_strings = None
+        self.has_globals = threading.Event()
+        self.has_locals = threading.Event()
+        self.has_format_strings = threading.Event()
+        if global_namespace is not None:
+            self.global_namespace = global_namespace
+        if local_namespace is not None:
+            self.local_namespace = local_namespace
+        if format_strings is not None:
+            self.format_strings = format_strings
+        # values
         self.values = queue.Queue()
         for value in args:
             self.push(value)
@@ -80,6 +100,36 @@ class Channel:
         ret = [Channel(*buffered_tokens) for _ in range(other)]
         threading.Thread(target=spread_values, args=(ret,)).start()
         return tuple(ret)
+    
+    @property
+    def global_namespace(self):
+        self.has_globals.wait()
+        return self._globals
+    
+    @global_namespace.setter
+    def global_namespace(self, value):
+        self._globals = value
+        self.has_globals.set()
+    
+    @property
+    def local_namespace(self):
+        self.has_locals.wait()
+        return self._locals
+    
+    @local_namespace.setter
+    def local_namespace(self, value):
+        self._locals = value
+        self.has_locals.set()
+    
+    @property
+    def format_strings(self):
+        self.has_format_strings.wait()
+        return self._format_strings
+    
+    @format_strings.setter
+    def format_strings(self, value):
+        self._format_strings = value
+        self.has_format_strings.set()
     
     def pop(self, wait=True):
         """Returns a token. Raises queue.Empty if no element is currently available, and StopIteration if the channel is terminated."""

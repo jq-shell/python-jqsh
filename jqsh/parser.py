@@ -98,8 +98,14 @@ matching_parens = { # a dictionary that maps opening parenthesis-like tokens (pa
 
 operators = [
     {
+        'binary': False,
+        TokenType.command: jqsh.filter.Command,
+        TokenType.global_variable: jqsh.filter.GlobalVariable
+    },
+    {
         TokenType.dot: jqsh.filter.Apply
     },
+    'variadic apply',
     {
         TokenType.comma: jqsh.filter.Comma
     },
@@ -249,21 +255,30 @@ def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}):
         if isinstance(token, Token) and token.type in atomic_tokens:
             tokens[i] = raise_for_filter(atomic_tokens[token.type](token.text))
     
-    # variadic apply
-    start = None
-    for i, token in reversed(list(enumerate(tokens))):
-        if isinstance(token, jqsh.filter.Filter):
-            if start is None:
-                start = i
-        else:
-            if start is not None and start > i + 1:
-                tokens[i + 1:start + 1] = [raise_for_filter(jqsh.filter.Apply(*tokens[i + 1:start + 1]))]
-            start = None
-    if start is not None and start > 0:
-        tokens[:start + 1] = [raise_for_filter(jqsh.filter.Apply(*tokens[:start + 1]))]
-    
     # operators
     for precedence_group in operators:
+        if precedence_group == 'variadic apply':
+            start = None
+            for i, token in reversed(list(enumerate(tokens))):
+                if isinstance(token, jqsh.filter.Filter):
+                    if start is None:
+                        start = i
+                else:
+                    if start is not None and start > i + 1:
+                        tokens[i + 1:start + 1] = [raise_for_filter(jqsh.filter.Apply(*tokens[i + 1:start + 1]))]
+                    start = None
+            if start is not None and start > 0:
+                tokens[:start + 1] = [raise_for_filter(jqsh.filter.Apply(*tokens[:start + 1]))]
+            continue
+        if not precedence_group.get('binary', True):
+            for i, token in reversed(list(enumerate(tokens))):
+                if isinstance(token, Token) and token.type in precedence_group:
+                    if len(tokens) == i + 1:
+                        raise SyntaxError('expected a filter after ' + repr(token) + ', nothing found')
+                    elif isinstance(tokens[i + 1], Token):
+                        raise SyntaxError('expected a filter after ' + repr(token) + ', found ' + repr(tokens[i + 1]) + ' instead')
+                    tokens[i:i + 2] = [raise_for_filter(precedence_group[token.type](attribute=tokens[i + 1]))]
+            continue
         ltr = not precedence_group.get('rtl', False)
         if ltr:
             tokens.reverse()
@@ -359,6 +374,8 @@ def parse_json(tokens, allow_extension_types=False):
                     raise illegal_token_exception(token, position=token_index, expected={TokenType.colon})
                 else:
                     token_index += 1
+                    if token_index >= len(tokens):
+                        raise Incomplete('unclosed JSON object at key path ' + repr(key_path[:-1]))
                     continue
             else:
                 raise illegal_token_exception(token, position=token_index, expected={TokenType.close_object, TokenType.string})
