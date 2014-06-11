@@ -1,26 +1,25 @@
 #!/usr/bin/env jqsh
 
-$fib = def (                  # the def builtin takes at least one argument, which will be the body of the new function.
-    range                     # when called without arguments, range takes numbers from its input and produces ranges from 0 to these numbers
-    | reduce (0, 1) (         # the single-argument form of reduce only uses its input as an indicator of how often to loop
-        nth 1, nth 0 + nth 1  # nth outputs the nth value from its input channel
+$fib = def (                 # the def builtin takes at least one argument, which will be the body of the new function.
+    range                    # when called without arguments, range takes numbers from its input and produces ranges from 0 to these numbers
+    | reduce (0, 1) (        # the single-argument form of reduce only uses its input as an indicator of how often to loop
+        nth 1, nth 0 + nth 1 # nth outputs the nth value from its input channel
     )
-    | first                   # first is short for nth 0, it can also output the first n values when called with an argument
-);                            # namespaces are preserved over the semicolon operator
+    | first                  # first is short for nth 0, it can also output the first n values when called with an argument
+);                           # namespaces are preserved over the semicolon operator
 
-$fibStream = def (            # this verison just keeps outputting the Fibonacci sequence, it should be used with the lazy builtin
+$fibStream = def (           # this verison just keeps outputting the Fibonacci sequence, it should be used with the lazy builtin
     0, (
-        repeat (              # repeat computes its argument once, then keeps outputting it. By default it keeps outputting null.
-            for [0, 1] (      # for works like reduce, except that the loop body's output is output after each iteration, not just the last
-                [.1, .0 + .1]
-            )
+        repeat               # repeat computes its argument once, then keeps outputting it. By default it keeps outputting null.
+        | for [0, 1] (       # for works like reduce, except that the loop body's output is output after each iteration, not just the last
+            [.1, .0 + .1]
         )
-        | .0                  # outputs the first value of each input array
+        | .0                 # outputs the first value of each input array
     )
 )
 
-ifmain (                      # ifmain does nothing if the module is imported, think Python's if __name__ == '__main__'
-    argv 1                    # when called with one argument, argv returns the nth member of the program's argument vector
-    | fromjson                # decodes the argument from a JSON string, in this case it should be a number
+ifmain (                     # ifmain does nothing if the module is imported, think Python's if __name__ == '__main__'
+    argv 1                   # when called with one argument, argv returns the nth member of the program's argument vector
+    | fromjson               # decodes the argument from a JSON string, in this case it should be a number
     | $fib
 )
