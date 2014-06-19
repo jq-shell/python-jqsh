@@ -86,8 +86,7 @@ json_tokens = [ # token types that are allowed in pure JSON
     TokenType.number,
     TokenType.open_array,
     TokenType.open_object,
-    TokenType.string,
-    TokenType.trailing_whitespace
+    TokenType.string
 ]
 
 matching_parens = { # a dictionary that maps opening parenthesis-like tokens (parens) to the associated closing parens
@@ -148,14 +147,14 @@ def illegal_token_exception(token, position=None, expected=None, line_numbers=Fa
         return SyntaxError('illegal ' + ('' if token.type is TokenType.illegal else token.type.name + ' ') + 'token' + ((' in line ' + str(token.line) if line_numbers and token.line is not None else '') if position is None else ' at position ' + repr(position)) + ('' if expected is None else ' (expected ' + ' or '.join(sorted(expected_token_type.name for expected_token_type in expected)) + ')'))
 
 def json_to_tokens(json_value, *, allow_extension_types=False, indent_level=0, indent_width=2):
-    single_indent = ' ' * indent_width
+    single_indent = '' if indent_width is None else ' ' * indent_width
     indent = single_indent * indent_level
     if allow_extension_types and isinstance(json_value, tuple) and len(json_value) == 2:
-        yield Token(TokenType.open_paren, token_string='(\n' + indent + single_indent)
+        yield Token(TokenType.open_paren, token_string='(' + ('' if indent_width is None else '\n' + indent + single_indent))
         yield from json_to_tokens(json_value[0], allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
         yield Token(TokenType.colon, token_string=': ')
         yield from json_to_tokens(json_value[1], allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
-        yield Token(TokenType.close_paren, token_string='\n' + indent + ')' + ('\n' if indent_level == 0 else ''))
+        yield Token(TokenType.close_paren, token_string=('' if indent_width is None else '\n' + indent) + ')' + ('\n' if indent_level == 0 else ''))
     elif json_value is False:
         yield Token(TokenType.name, token_string='false' + ('\n' if indent_level == 0 else ''), text='false')
     elif json_value is None:
@@ -168,21 +167,21 @@ def json_to_tokens(json_value, *, allow_extension_types=False, indent_level=0, i
     elif isinstance(json_value, decimal.Decimal) or isinstance(json_value, int) or isinstance(json_value, float):
         yield Token(TokenType.number, token_string=str(json_value) + ('\n' if indent_level == 0 else ''), text=str(json_value))
     elif isinstance(json_value, list):
-        yield Token(TokenType.open_array, token_string=('[\n' + indent + single_indent if len(json_value) else '['))
+        yield Token(TokenType.open_array, token_string=('[' + '\n' + indent + single_indent if indent_width is not None and len(json_value) else '['))
         for i, item in enumerate(json_value):
             if i > 0:
-                yield Token(TokenType.comma, token_string=',\n' + indent + single_indent)
+                yield Token(TokenType.comma, token_string=',' + (' ' if indent_width is None else '\n' + indent + single_indent))
             yield from json_to_tokens(item, allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
-        yield Token(TokenType.close_array, token_string=('\n' + indent + ']' if len(json_value) else ']') + ('\n' if indent_level == 0 else ''))
+        yield Token(TokenType.close_array, token_string=('\n' + indent + ']' if indent_width is not None and len(json_value) else ']') + ('\n' if indent_level == 0 else ''))
     elif isinstance(json_value, dict):
-        yield Token(TokenType.open_object, token_string=('{\n' + indent + single_indent if len(json_value) else '{'))
+        yield Token(TokenType.open_object, token_string=('{' + '\n' + indent + single_indent if indent_width is not None and len(json_value) else '{'))
         for i, (key, value) in enumerate(sorted(json_value.items(), key=lambda pair: pair[0])): # sort the pairs of an object by their names
             if i > 0:
-                yield Token(TokenType.comma, token_string=',\n' + indent + single_indent)
+                yield Token(TokenType.comma, token_string=',' + (' ' if indent_width is None else '\n' + indent + single_indent))
             yield Token(TokenType.string, token_string=jqsh.filter.StringLiteral.representation(key), text=key)
             yield Token(TokenType.colon, token_string=': ')
             yield from json_to_tokens(value, allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
-        yield Token(TokenType.close_object, token_string=('\n' + indent + '}' if len(json_value) else '}') + ('\n' if indent_level == 0 else ''))
+        yield Token(TokenType.close_object, token_string=('\n' + indent + '}' if indent_width is not None and len(json_value) else '}') + ('\n' if indent_level == 0 else ''))
     elif isinstance(json_value, str):
         yield Token(TokenType.string, token_string=jqsh.filter.StringLiteral.representation(json_value) + ('\n' if indent_level == 0 else ''), text=json_value)
     else:
@@ -313,8 +312,10 @@ def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}):
 def parse_json(tokens, allow_extension_types=False):
     if isinstance(tokens, str):
         tokens = list(tokenize(tokens))
-    if not len(tokens):
+    if len(tokens) == 0 or len(tokens) == 1 and tokens[0].type is TokenType.trailing_whitespace:
         raise Incomplete('JSON is empty')
+    if tokens[-1].type is TokenType.trailing_whitespace:
+        tokens.pop()
     for token in tokens:
         if token.type not in json_tokens:
             raise illegal_token_exception(token)
@@ -382,10 +383,6 @@ def parse_json(tokens, allow_extension_types=False):
         elif token.type is TokenType.string:
             ret = set_value_at_key_path(ret, key_path, token.text)
             token_index += 1
-        elif token.type is TokenType.trailing_whitespace:
-            token_index += 1
-            if token_index < len(tokens):
-                raise SyntaxError('found a trailing_whitespace token in a non-trailing position')
         else:
             raise illegal_token_exception(token, position=token_index, expected={TokenType.name, TokenType.number, TokenType.open_array, TokenType.open_object, TokenType.string, TokenType.trailing_whitespace})
         keep_closing = True
@@ -440,6 +437,8 @@ def parse_json(tokens, allow_extension_types=False):
 def parse_json_values(tokens):
     if isinstance(tokens, str):
         tokens = list(tokenize(tokens))
+    if len(tokens) and tokens[-1].type is TokenType.trailing_whitespace:
+        tokens = tokens[:-1]
     prefix_length = 1
     last_exception = None
     while len(tokens):

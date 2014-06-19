@@ -78,6 +78,16 @@ class Filter:
         handle_format_strings.join()
         output_channel.terminate()
     
+    def sensible_string(self, input_channel=None):
+        try:
+            ret = next(self.start(input_channel))
+        except StopIteration:
+            raise Exception('empty')
+        if isinstance(ret, str):
+            return ret
+        else:
+            raise Exception('type')
+    
     def start(self, input_channel=None):
         filter_thread = FilterThread(self, input_channel=input_channel)
         filter_thread.start()
@@ -121,6 +131,9 @@ class Name(Filter):
             output_channel.terminate()
         else:
             builtin(input_channel=input_channel, output_channel=output_channel)
+    
+    def sensible_string(self, input_channel=None):
+        return self.name
 
 class NumberLiteral(Filter):
     def __init__(self, number):
@@ -250,8 +263,25 @@ class UnaryOperator(Filter):
 class Command(UnaryOperator):
     operator_string = '!'
     
-    def run(self):
-        yield Exception('notImplemented') #TODO
+    def run(self, input_channel):
+        import jqsh.parser
+        input_channel, attribute_input = input_channel / 2
+        command_name = self.attribute.sensible_string(attribute_input)
+        try:
+            popen = subprocess.Popen(command_name, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            yield Exception('path')
+            return
+        except PermissionError:
+            yield Exception('permission')
+            return
+        for value in input_channel:
+            popen.stdin.write(b''.join(str(token).encode('utf-8') for token in jqsh.parser.json_to_tokens(value, indent_width=None)))
+        popen.stdin.write(b'\x04')
+        try:
+            yield from jqsh.parser.parse_json_values(popen.stdout.read().decode('utf-8'))
+        except (UnicodeDecodeError, SyntaxError, jqsh.parser.Incomplete):
+            yield Exception('commandOutput')
 
 class GlobalVariable(UnaryOperator):
     operator_string = '$'
@@ -263,18 +293,11 @@ class GlobalVariable(UnaryOperator):
         handle_globals.start()
         handle_locals.start()
         handle_format_strings.start()
-        if self.attribute.__class__ == Name:
-            variable_name = self.attribute.name
+        try:
+            variable_name = self.attribute.sensible_string(input_channel)
+        except Exception as e:
+            output_channel.push(e)
         else:
-            try:
-                variable_name = next(self.attribute.start(input_channel))
-            except StopIteration:
-                output_channel.push(Exception('empty'))
-                variable_name = None
-            if not isinstance(variable_name, str):
-                output_channel.push(Exception('type'))
-                variable_name = None
-        if variable_name is not None:
             if variable_name in input_channel.global_namespace:
                 for value in input_channel.global_namespace[variable_name]:
                     output_channel.push(value)
