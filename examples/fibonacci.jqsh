@@ -16,7 +16,7 @@ $fibStream = def (           # this verison just keeps outputting the Fibonacci 
         )
         | .0                 # outputs the first value of each input array
     )
-)
+);
 
 ifmain (                     # ifmain does nothing if the module is imported, think Python's if __name__ == '__main__'
     argv 1                   # when called with one argument, argv returns the nth member of the program's argument vector
