@@ -3,6 +3,7 @@ import sys
 import jqsh
 import jqsh.filter
 import jqsh.parser
+import jqsh.values
 
 def print_output(filter_thread, output_file=None):
     if output_file is None:
@@ -15,9 +16,8 @@ def print_output(filter_thread, output_file=None):
             token = filter_thread.output_channel.pop()
         except StopIteration:
             break
-        if token.type is jqsh.parser.TokenType.name and token.text == 'raise':
-            print('\rjqsh: uncaught exception:', end=' ', file=output_file, flush=True)
-            print(filter_thread.output_channel.pop().text, file=output_file, flush=True)
+        if isinstance(token, jqsh.values.JQSHException):
+            token.print(output_file=output_file)
             break
         else:
             print(syntax_highlight(token), end='', file=output_file, flush=True)

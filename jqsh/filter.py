@@ -1,7 +1,10 @@
+import sys
+
 import decimal
 import jqsh
 import jqsh.channel
 import jqsh.functions
+import jqsh.values
 import subprocess
 import threading
 
@@ -48,10 +51,10 @@ class Filter:
             try:
                 for value in self.run(input_channel=bridge):
                     output_channel.push(value)
-                    if isinstance(value, Exception):
+                    if isinstance(value, jqsh.values.JQSHException):
                         break
-            except:
-                output_channel.push(Exception('internal'))
+            except Exception as e:
+                output_channel.push(jqsh.values.JQSHException('internal', python_exception=e, exc_info=sys.exc_info()))
         
         bridge_channel = jqsh.channel.Channel()
         helper_thread = threading.Thread(target=run_thread, kwargs={'bridge': bridge_channel})
@@ -68,7 +71,7 @@ class Filter:
             except StopIteration:
                 break
             bridge_channel.push(token)
-            if isinstance(token, Exception):
+            if isinstance(token, jqsh.values.JQSHException):
                 output_channel.push(token)
                 break
         bridge_channel.terminate()
@@ -79,14 +82,11 @@ class Filter:
         output_channel.terminate()
     
     def sensible_string(self, input_channel=None):
-        try:
-            ret = next(self.start(input_channel))
-        except StopIteration:
-            raise Exception('empty')
+        ret = next(self.start(input_channel))
         if isinstance(ret, str):
             return ret
         else:
-            raise Exception('type')
+            raise TypeError('got a ' + ret.__class__.__name__ + ', expected a string')
     
     def start(self, input_channel=None):
         filter_thread = FilterThread(self, input_channel=input_channel)
@@ -127,7 +127,7 @@ class Name(Filter):
         try:
             builtin = jqsh.functions.get_builtin(self.name)
         except KeyError:
-            output_channel.push(Exception('numArgs' if self.name in jqsh.functions.builtin_functions else 'name'))
+            output_channel.push(jqsh.values.JQSHException('numArgs' if self.name in jqsh.functions.builtin_functions else 'name'))
             output_channel.terminate()
         else:
             builtin(input_channel=input_channel, output_channel=output_channel)
@@ -199,6 +199,21 @@ class Operator(Filter):
     
     def __str__(self):
         return str(self.left_operand) + self.operator_string + str(self.right_operand)
+    
+    def output_pairs(self, input_channel):
+        #TODO don't block until both operands have terminated
+        left_input, right_input = input_channel / 2
+        left_output = list(self.left_operand.start(left_input))
+        right_output = list(self.right_operand.start(right_input))
+        if len(left_output) == 0 and len(right_output) == 0:
+            return
+        elif len(left_output) == 0:
+            yield from right_output
+        elif len(right_output) == 0:
+            yield from left_output
+        else:
+            for i in range(max(len(left_output), len(right_output))):
+                yield left_output[i % len(left_output)], right_output[i % len(right_output)]
 
 class Pipe(Operator):
     operator_string = ' | '
@@ -206,6 +221,25 @@ class Pipe(Operator):
     def run(self, input_channel):
         left_output = self.left_operand.start(input_channel)
         yield from self.right_operand.start(left_output)
+
+class Add(Operator):
+    operator_string = ' + '
+    
+    def run(self, input_channel):
+        for output in self.output_pairs(input_channel):
+            if isinstance(output, tuple):
+                left_output, right_output = output
+            else:
+                yield output
+                continue
+            if any(all(isinstance(output, value_type) for output in (left_output, right_output)) for value_type in (decimal.Decimal, list, str)):
+                yield left_output + right_output
+            elif all(isinstance(output, dict) for output in (left_output, right_output)):
+                ret = copy.copy(left_output)
+                ret.update(right_output)
+                yield ret
+            else:
+                yield jqsh.values.JQSHException('type')
 
 class Apply(Operator):
     operator_string = '.'
@@ -236,7 +270,7 @@ class Apply(Operator):
         elif len(self.attributes) == 2 and all(attribute.__class__ == NumberLiteral for attribute in self.attributes):
             yield decimal.Decimal(str(self.attributes[0]) + '.' + str(self.attributes[1]))
         else:
-            yield Exception('notImplemented')
+            yield jqsh.values.JQSHException('notImplemented')
 
 class Comma(Operator):
     def __str__(self):
@@ -247,6 +281,31 @@ class Comma(Operator):
         right_output = self.right_operand.start(right_input)
         yield from self.left_operand.start(left_input)
         yield from right_output
+
+class Multiply(Operator):
+    operator_string = ' * '
+    
+    def run(self, input_channel):
+        for output in self.output_pairs(input_channel):
+            if isinstance(output, tuple):
+                left_output, right_output = output
+            else:
+                yield output
+                continue
+            if isinstance(left_output, decimal.Decimal) and isinstance(right_output, decimal.Decimal):
+                yield left_output * right_output
+            elif any(isinstance(left_output, value_type) for value_type in (list, str)) and isinstance(right_output, decimal.Decimal):
+                if right_output % 1 == 0:
+                    yield left_output * int(right_output)
+                else:
+                    yield jqsh.values.JQSHException('integer')
+            elif isinstance(left_output, decimal.Decimal) and any(isinstance(right_output, value_type) for value_type in (list, str)):
+                if right_output % 1 == 0:
+                    yield int(left_output) * right_output
+                else:
+                    yield jqsh.values.JQSHException('integer')
+            else:
+                yield jqsh.values.JQSHException('type')
 
 class UnaryOperator(Filter):
     """Abstract base class for unary-only operator filters."""
@@ -266,14 +325,18 @@ class Command(UnaryOperator):
     def run(self, input_channel):
         import jqsh.parser
         input_channel, attribute_input = input_channel / 2
-        command_name = self.attribute.sensible_string(attribute_input)
+        try:
+            command_name = self.attribute.sensible_string(attribute_input)
+        except (StopIteration, TypeError):
+            yield jqsh.values.JQSHException('sensibleString')
+            return
         try:
             popen = subprocess.Popen(command_name, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         except FileNotFoundError:
-            yield Exception('path')
+            yield jqsh.values.JQSHException('path')
             return
         except PermissionError:
-            yield Exception('permission')
+            yield jqsh.values.JQSHException('permission')
             return
         for value in input_channel:
             popen.stdin.write(b''.join(str(token).encode('utf-8') for token in jqsh.parser.json_to_tokens(value, indent_width=None)))
@@ -281,7 +344,7 @@ class Command(UnaryOperator):
         try:
             yield from jqsh.parser.parse_json_values(popen.stdout.read().decode('utf-8'))
         except (UnicodeDecodeError, SyntaxError, jqsh.parser.Incomplete):
-            yield Exception('commandOutput')
+            yield jqsh.values.JQSHException('commandOutput')
 
 class GlobalVariable(UnaryOperator):
     operator_string = '$'
@@ -302,7 +365,7 @@ class GlobalVariable(UnaryOperator):
                 for value in input_channel.global_namespace[variable_name]:
                     output_channel.push(value)
             else:
-                output_channel.push(Exception('name'))
+                output_channel.push(jqsh.values.JQSHException('name'))
         output_channel.terminate()
         handle_globals.join()
         handle_locals.join()

@@ -2,6 +2,7 @@ import decimal
 import enum
 import jqsh
 import jqsh.filter
+import jqsh.values
 import string
 import unicodedata
 
@@ -23,6 +24,7 @@ TokenType = enum.Enum('TokenType', [
     'illegal',
     'minus',
     'modulo',
+    'multiply',
     'name',
     'number',
     'open_array',
@@ -106,6 +108,12 @@ operators = [
     },
     'variadic apply',
     {
+        TokenType.multiply: jqsh.filter.Multiply
+    },
+    {
+        TokenType.plus: jqsh.filter.Add
+    },
+    {
         TokenType.comma: jqsh.filter.Comma
     },
     {
@@ -125,6 +133,7 @@ symbols = {
     '%': TokenType.modulo,
     '(': TokenType.open_paren,
     ')': TokenType.close_paren,
+    '*': TokenType.multiply,
     '+': TokenType.plus,
     ',': TokenType.comma,
     '-': TokenType.minus,
@@ -159,9 +168,8 @@ def json_to_tokens(json_value, *, allow_extension_types=False, indent_level=0, i
         yield Token(TokenType.name, token_string='false' + ('\n' if indent_level == 0 else ''), text='false')
     elif json_value is None:
         yield Token(TokenType.name, token_string='null' + ('\n' if indent_level == 0 else ''), text='null')
-    elif allow_extension_types and isinstance(json_value, Exception):
-        yield Token(TokenType.name, token_string='raise', text='raise')
-        yield Token(TokenType.string, token_string=' ' + jqsh.filter.StringLiteral.representation(json_value) + ('\n' if indent_level == 0 else ''), text=str(json_value))
+    elif allow_extension_types and isinstance(json_value, jqsh.values.JQSHException):
+        yield json_value
     elif json_value is True:
         yield Token(TokenType.name, token_string='true' + ('\n' if indent_level == 0 else ''), text='true')
     elif isinstance(json_value, decimal.Decimal) or isinstance(json_value, int) or isinstance(json_value, float):
@@ -312,34 +320,25 @@ def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}):
 def parse_json(tokens, allow_extension_types=False):
     if isinstance(tokens, str):
         tokens = list(tokenize(tokens))
-    if len(tokens) == 0 or len(tokens) == 1 and tokens[0].type is TokenType.trailing_whitespace:
+    if len(tokens) == 0 or len(tokens) == 1 and isinstance(tokens[0], Token) and tokens[0].type is TokenType.trailing_whitespace:
         raise Incomplete('JSON is empty')
-    if tokens[-1].type is TokenType.trailing_whitespace:
+    if isinstance(tokens[-1], Token) and tokens[-1].type is TokenType.trailing_whitespace:
         tokens.pop()
-    for token in tokens:
-        if token.type not in json_tokens:
-            raise illegal_token_exception(token)
     ret = None
     key_path = []
     token_index = 0
     while token_index < len(tokens):
         token = tokens[token_index]
-        if token.type is TokenType.name:
+        if isinstance(token, jqsh.values.JQSHException):
+            ret = set_value_at_key_path(ret, key_path, token)
+            token_index += 1
+        elif token.type is TokenType.name:
             if token.text == 'false':
                 ret = set_value_at_key_path(ret, key_path, False)
                 token_index += 1
             elif token.text == 'null':
                 ret = set_value_at_key_path(ret, key_path, None)
                 token_index += 1
-            elif allow_extension_types and token.text == 'raise':
-                token_index += 1
-                if token_index >= len(tokens):
-                    raise Incomplete('unnamed exception')
-                elif tokens[token_index].type is not TokenType.string:
-                    raise illegal_token_exception(tokens[token_index], position=token_index, expected={TokenType.string})
-                else:
-                    ret = set_value_at_key_path(ret, key_path, Exception(tokens[token_index].text))
-                    token_index += 1
             elif token.text == 'true':
                 ret = set_value_at_key_path(ret, key_path, True)
                 token_index += 1

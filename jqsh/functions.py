@@ -1,8 +1,10 @@
 import collections
+import decimal
 import functools
 import jqsh
 import jqsh.channel
 import jqsh.filter
+import jqsh.values
 import threading
 
 builtin_functions = collections.defaultdict(dict)
@@ -35,7 +37,7 @@ def wrap_builtin(f):
         def run_thread(bridge):
             for value in f(input_channel=bridge):
                 output_channel.push(value)
-                if isinstance(value, Exception):
+                if isinstance(value, jqsh.values.JQSHException):
                     break
         
         bridge_channel = jqsh.channel.Channel()
@@ -74,6 +76,20 @@ def empty(input_channel):
 @wrap_builtin
 def false(input_channel):
     yield False
+
+@def_builtin
+@wrap_builtin
+def implode(input_channel):
+    ret = ''
+    for value in input_channel:
+        if not isinstance(value, decimal.Decimal):
+            yield Exception('type')
+            return
+        if value % 1 != 0:
+            yield Exception('integer')
+            return
+        ret += chr(value)
+    yield ret
 
 @def_builtin
 @wrap_builtin

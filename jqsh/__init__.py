@@ -1,3 +1,4 @@
+import jqsh.values
 import jqsh.channel
 import jqsh.cli
 import jqsh.filter
@@ -8,5 +9,6 @@ __all__ = [
     'cli',
     'filter',
     'functions',
-    'parser'
+    'parser',
+    'values'
 ]
