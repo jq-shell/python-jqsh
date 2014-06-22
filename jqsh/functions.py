@@ -92,13 +92,42 @@ def implode(input_channel):
     ret = ''
     for value in input_channel:
         if not isinstance(value, decimal.Decimal):
-            yield Exception('type')
+            yield jqsh.values.JQSHException('type')
             return
         if value % 1 != 0:
-            yield Exception('integer')
+            yield jqsh.values.JQSHException('integer')
             return
         ret += chr(value)
     yield ret
+
+@def_builtin(1)
+@wrap_builtin
+def nth(index, input_channel):
+    input_channel, index_input = input_channel / 2
+    try:
+        index_value = next(index.start(index_input))
+    except StopIteration:
+        yield jqsh.values.JQSHException('empty')
+        return
+    if isinstance(index_value, decimal.Decimal):
+        if index_value % 1 == 0:
+            index_value = int(index_value)
+        else:
+            yield jqsh.values.JQSHException('integer')
+            return
+    else:
+        yield jqsh.values.JQSHException('type')
+        return
+    for i in range(index_value):
+        try:
+            next(input_channel)
+        except StopIteration:
+            yield jqsh.values.JQSHException('numValues')
+            return
+    try:
+        yield next(input_channel)
+    except StopIteration:
+        yield jqsh.values.JQSHException('numValues')
 
 @def_builtin(0)
 @wrap_builtin
