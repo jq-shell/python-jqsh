@@ -21,6 +21,7 @@ def print_output(filter_thread, output_file=None):
             break
         else:
             print(syntax_highlight(token), end='', file=output_file, flush=True)
+    return filter_thread.output_channel.namespaces()
 
 def syntax_highlight(token):
     #TODO add actual highlighting

@@ -17,9 +17,12 @@ class Channel:
         if empty_namespaces is None:
             empty_namespaces = terminated
         if empty_namespaces:
-            global_namespace = {}
-            local_namespace = {}
-            format_strings = {}
+            if global_namespace is None:
+                global_namespace = {}
+            if local_namespace is None:
+                local_namespace = {}
+            if format_strings is None:
+                format_strings = {}
         self._globals = None
         self._locals = None
         self._format_strings = None
@@ -135,6 +138,14 @@ class Channel:
         self._format_strings = value
         self.has_format_strings.set()
     
+    def get_namespaces(self, from_channel):
+        self.global_namespace = from_channel.global_namespace
+        self.local_namespace = from_channel.local_namespace
+        self.format_strings = from_channel.format_strings
+    
+    def namespaces(self):
+        return self.global_namespace, self.local_namespace, self.format_strings
+    
     def pop(self, wait=True):
         """Returns a token. Raises queue.Empty if no element is currently available, and StopIteration if the channel is terminated."""
         with self.output_lock:
@@ -145,6 +156,26 @@ class Channel:
                 self.terminated = True
                 raise StopIteration('jqsh channel has terminated')
         return ret
+    
+    def pull(self, from_channel, terminate=True):
+        """Move all values from from_channel to this one, blocking until from_channel terminates, then optionally terminate."""
+        if terminate:
+            with self.input_lock:
+                if self.input_terminated:
+                    raise RuntimeError('jqsh channel has terminated')
+                self.input_terminated = True
+        else:
+            self.input_lock.acquire()
+        while True:
+            try:
+                token = from_channel.pop()
+            except StopIteration:
+                break
+            self.values.put(token)
+        if terminate:
+            self.values.put(Terminator())
+        else:
+            self.input_lock.release()
     
     def push(self, value):
         if isinstance(value, jqsh.parser.Token):

@@ -69,9 +69,12 @@ if filter_argument is not None or module is not None:
     jqsh.cli.print_output(jqsh.filter.FilterThread(the_filter, input_channel=stdin_channel)) #TODO fix: this currently waits to read the entire module file before starting to tokenize it
     sys.exit()
 
+global_namespace = {}
+local_namespace = {}
+format_strings = {}
 while True: # a simple repl
     try:
-        jqsh.cli.print_output(jqsh.parser.parse(input('jqsh> ')))
+        global_namespace, local_namespace, format_strings = jqsh.cli.print_output(jqsh.filter.FilterThread(jqsh.parser.parse(input('jqsh> ')), input_channel=jqsh.channel.Channel(global_namespace=global_namespace, local_namespace=local_namespace, format_strings=format_strings, terminated=True)))
     except EOFError:
         print('^D')
         break

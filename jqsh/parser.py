@@ -117,8 +117,14 @@ operators = [
         TokenType.comma: jqsh.filter.Comma
     },
     {
+        TokenType.assign: jqsh.filter.Assign
+    },
+    {
         'rtl': True,
         TokenType.pipe: jqsh.filter.Pipe
+    },
+    {
+        TokenType.semicolon: jqsh.filter.Semicolon
     }
 ]
 

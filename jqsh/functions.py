@@ -14,7 +14,10 @@ def get_builtin(name, *args, num_args=None):
         num_args = len(args)
     if name in builtin_functions:
         function_vector = builtin_functions[name]
-        return function_vector.get(num_args, function_vector['varargs'])
+        if num_args in function_vector:
+            return function_vector[num_args]
+        else:
+            return function_vector['varargs']
     else:
         raise KeyError('No such built-in function')
 
@@ -35,7 +38,7 @@ def wrap_builtin(f):
     @functools.wraps(f)
     def wrapper(*args, input_channel=None, output_channel=None):
         def run_thread(bridge):
-            for value in f(input_channel=bridge):
+            for value in f(*args, input_channel=bridge):
                 output_channel.push(value)
                 if isinstance(value, jqsh.values.JQSHException):
                     break
@@ -66,18 +69,24 @@ def wrap_builtin(f):
         output_channel.terminate()
     return wrapper
 
-@def_builtin
+@def_builtin(1)
+@wrap_builtin
+def each(the_filter, input_channel):
+    for value in input_channel:
+        yield from the_filter.start(jqsh.channel.Channel(value, terminated=True))
+
+@def_builtin(0)
 @wrap_builtin
 def empty(input_channel):
     return
     yield # the empty generator
 
-@def_builtin
+@def_builtin(0)
 @wrap_builtin
 def false(input_channel):
     yield False
 
-@def_builtin
+@def_builtin(0)
 @wrap_builtin
 def implode(input_channel):
     ret = ''
@@ -91,12 +100,12 @@ def implode(input_channel):
         ret += chr(value)
     yield ret
 
-@def_builtin
+@def_builtin(0)
 @wrap_builtin
 def null(input_channel):
     yield None
 
-@def_builtin
+@def_builtin(0)
 @wrap_builtin
 def true(input_channel):
     yield True
