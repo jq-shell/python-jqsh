@@ -312,19 +312,61 @@ class Apply(Operator):
             return str(self.attributes[0]) + '.' + str(self.attributes[1])
     
     def run_raw(self, input_channel, output_channel):
-        if all(attribute.__class__ == Filter for attribute in self.attributes):
+        if all(attribute.__class__ == Filter for attribute in self.attributes): # identity function
             output_channel.pull(input_channel)
-        elif len(self.attributes) == 2 and all(attribute.__class__ == NumberLiteral for attribute in self.attributes):
+        elif len(self.attributes) == 2 and all(attribute.__class__ == NumberLiteral for attribute in self.attributes): # decimal number
             output_channel.push(decimal.Decimal(str(self.attributes[0]) + '.' + str(self.attributes[1])))
             output_channel.terminate()
-        else:
+            output_channel.get_namespaces(input_channel)
+            return
+        elif self.attributes[0].__class__ == Filter: # subscripting/lookup on input values
+            #TODO support variadic form (recursive run_raw calls)
+            input_channel, key_input = input_channel / 2
+            try:
+                key = next(self.attributes[1].start(key_input))
+            except StopIteration:
+                output_channel.push(jqsh.values.JQSHException('empty'))
+                output_channel.terminate()
+                output_channel.get_namespaces(input_channel)
+                return
+            for value in input_channel:
+                if isinstance(value, dict):
+                    if key in value:
+                        output_channel.push(value[key])
+                    else:
+                        output_channel.push(jqsh.values.JQSHException('key'))
+                elif isinstance(value, list):
+                    if isinstance(key, decimal.Decimal):
+                        if key % 1 == 0:
+                            try:
+                                output_channel.push(value[int(key)])
+                            except IndexError:
+                                output_channel.push(jqsh.values.JQSHException('index'))
+                        else:
+                            output_channel.push(jqsh.values.JQSHException('integer'))
+                    else:
+                        output_channel.push(jqsh.values.JQSHException('type'))
+                else:
+                    output_channel.push(jqsh.values.JQSHException('type'))
+            output_channel.terminate()
+            output_channel.get_namespaces(input_channel)
+            return
+        else: # built-in function with arguments
             input_channel, string_input = input_channel / 2
             try:
                 function_name = self.attributes[0].sensible_string(input_channel=string_input)
+            except (StopIteration, TypeError):
+                output_channel.push(jqsh.values.JQSHException('sensibleString'))
+                output_channel.terminate()
+                output_channel.get_namespaces(input_channel)
+                return
+            try:
                 builtin = jqsh.functions.get_builtin(function_name, *self.attributes[1:])
             except KeyError:
                 output_channel.push(jqsh.values.JQSHException('numArgs') if function_name in jqsh.functions.builtin_functions else jqsh.values.JQSHException('name', missing_name=function_name))
                 output_channel.terminate()
+                output_channel.get_namespaces(input_channel)
+                return
             else:
                 builtin(*self.attributes[1:], input_channel=input_channel, output_channel=output_channel)
 
