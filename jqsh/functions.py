@@ -5,6 +5,7 @@ import jqsh
 import jqsh.channel
 import jqsh.filter
 import jqsh.values
+import builtins as python_builtins
 import threading
 
 builtin_functions = collections.defaultdict(dict)
@@ -21,9 +22,9 @@ def get_builtin(name, *args, num_args=None):
     else:
         raise KeyError('No such built-in function')
 
-def def_builtin(num_args=0):
+def def_builtin(num_args=0, name=None):
     def ret(f, any_args=False):
-        builtin_functions[f.__name__]['varargs' if any_args else num_args] = f
+        builtin_functions[f.__name__ if name is None else name]['varargs' if any_args else num_args] = f
         @functools.wraps(f)
         def wrapper(*args, input_channel=None, output_channel=None):
             if not any_args and len(args) != num_args:
@@ -86,6 +87,16 @@ def empty(input_channel):
 def false(input_channel):
     yield False
 
+@def_builtin(2, name='for')
+@wrap_builtin
+def jqsh_for(initial, body, input_channel):
+    input_channel, initial_input = input_channel / 2
+    output_channel = initial.start(initial_input)
+    for value in input_channel:
+        output_channel = body.start(output_channel)
+        output_channel, current_output = output_channel / 2
+        yield from current_output
+
 @def_builtin(0)
 @wrap_builtin
 def implode(input_channel):
@@ -118,7 +129,7 @@ def nth(index, input_channel):
     else:
         yield jqsh.values.JQSHException('type')
         return
-    for i in range(index_value):
+    for i in python_builtins.range(index_value):
         try:
             next(input_channel)
         except StopIteration:
@@ -133,6 +144,27 @@ def nth(index, input_channel):
 @wrap_builtin
 def null(input_channel):
     yield None
+
+@def_builtin(0)
+@wrap_builtin
+def range(input_channel):
+    for value in input_channel:
+        if isinstance(value, decimal.Decimal):
+            if value % 1 == 0:
+                yield from (decimal.Decimal(number) for number in python_builtins.range(int(value)))
+            else:
+                yield jqsh.values.JQSHException('integer')
+        else:
+            yield jqsh.values.JQSHException('type')
+
+@def_builtin(2)
+@wrap_builtin
+def reduce(initial, body, input_channel):
+    input_channel, initial_input = input_channel / 2
+    output_channel = initial.start(initial_input)
+    for value in input_channel:
+        output_channel = body.start(output_channel)
+    yield from output_channel
 
 @def_builtin(0)
 @wrap_builtin
