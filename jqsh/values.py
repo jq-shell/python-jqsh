@@ -380,7 +380,7 @@ class Object(Value, jqsh.channel.Channel, collections.abc.Mapping):
         return self.value_store[key]
     
     def __hash__(self):
-        return functools.reduce(operator.xor, (hash(key) for key in self))  
+        return functools.reduce(operator.xor, (hash(key) for key in self), 0)
     
     def __init__(self, values=(), terminated=True):
         if isinstance(values, dict) or isinstance(values, Object):
