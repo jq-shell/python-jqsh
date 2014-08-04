@@ -400,7 +400,7 @@ def parse_json(tokens, allow_extension_types=False):
         else:
             raise illegal_token_exception(token, position=token_index, expected={TokenType.name, TokenType.number, TokenType.open_array, TokenType.open_object, TokenType.string, TokenType.trailing_whitespace})
         keep_closing = True
-        while keep_closing and len(ret_path):
+        while keep_closing and len(ret_path) > 1:
             if isinstance(ret_path[-1], jqsh.values.Object): # we are in an object, get the next key or close it
                 if token_index >= len(tokens):
                     raise Incomplete('Unclosed JSON object at position ' + str(token_index))
