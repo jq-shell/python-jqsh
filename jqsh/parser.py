@@ -91,6 +91,11 @@ json_tokens = [ # token types that are allowed in pure JSON
     TokenType.string
 ]
 
+keyword_parens = { # a dictionary that maps starting keywords of keyword parens to the possible inner keywords. All keyword parens end with the “end” keyword.
+    'if': {'then', 'elif', 'elseIf', 'else'},
+    'try': {'catch', 'except', 'else'}
+}
+
 matching_parens = { # a dictionary that maps opening parenthesis-like tokens (parens) to the associated closing parens
     TokenType.open_array: TokenType.close_array,
     TokenType.open_object: TokenType.close_object,
