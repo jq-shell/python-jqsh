@@ -261,6 +261,7 @@ def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}, cont
     # parenthesis-like filters
     paren_balance = 0
     paren_start = None
+    middle_keywords = []
     for i, token in reversed(list(enumerate(tokens))): # iterating over the token list in reverse because we modify it in the process
         if not isinstance(token, Token):
             continue
