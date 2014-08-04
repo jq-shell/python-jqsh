@@ -14,7 +14,8 @@ Options:
 
 import sys
 
-import jqsh
+sys.path.append('/opt/py')
+
 import jqsh.channel
 import jqsh.cli
 import jqsh.filter
