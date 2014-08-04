@@ -1,19 +1,32 @@
-import jqsh
-import jqsh.filter
-import jqsh.parser
+import functools
+import jqsh.context
 import queue
 import threading
 
 class Terminator:
     """a special value used to signal the end of a channel"""
 
+def coerce_other(f):
+    @functools.wraps(f)
+    def wrapper(self, other):
+        import jqsh.values
+        
+        return f(self, jqsh.values.from_native(other))
+    
+    return wrapper
+
 class Channel:
-    def __init__(self, *args, global_namespace=None, local_namespace=None, format_strings=None, terminated=False, empty_namespaces=None):
+    _globals = None
+    _locals = None
+    _format_strings = None
+    _context = None
+    input_terminated = False # has the terminator been pushed?
+    terminated = False # has the terminator been popped?
+    
+    def __init__(self, *args, global_namespace=None, local_namespace=None, format_strings=None, terminated=False, empty_namespaces=None, context=None):
         self.input_lock = threading.Lock()
-        self.input_terminated = False # has the terminator been pushed?
         self.output_lock = threading.Lock()
-        self.terminated = False # has the terminator been popped?
-        # namespaces
+        # namespaces and context
         if empty_namespaces is None:
             empty_namespaces = terminated
         if empty_namespaces:
@@ -23,20 +36,22 @@ class Channel:
                 local_namespace = {}
             if format_strings is None:
                 format_strings = {}
-        self._globals = None
-        self._locals = None
-        self._format_strings = None
+            if context is None:
+                context = jqsh.context.FilterContext()
         self.has_globals = threading.Event()
         self.has_locals = threading.Event()
         self.has_format_strings = threading.Event()
+        self.has_context = threading.Event()
         if global_namespace is not None:
             self.global_namespace = global_namespace
         if local_namespace is not None:
             self.local_namespace = local_namespace
         if format_strings is not None:
             self.format_strings = format_strings
+        if context is not None:
+            self.context = context
         # values
-        self.values = queue.Queue()
+        self.value_queue = queue.Queue()
         for value in args:
             self.push(value)
         if terminated:
@@ -46,27 +61,16 @@ class Channel:
         return self
     
     def __next__(self):
-        """Raises queue.Empty if no element is currently available, SyntaxError if the tokens are not valid JSON, and StopIteration if the channel is terminated."""
-        if self.terminated:
-            raise StopIteration('jqsh channel has terminated')
-        tokens = []
+        """Raises StopIteration if the channel is terminated."""
         with self.output_lock:
-            while True:
-                if self.terminated:
-                    if len(tokens):
-                        raise jqsh.parser.Incomplete('jqsh channel has terminated mid-value')
-                    raise StopIteration('jqsh channel has terminated')
-                token = self.values.get()
-                if isinstance(token, Terminator):
-                    self.terminated = True
-                    if len(tokens):
-                        raise jqsh.parser.Incomplete('jqsh channel has terminated mid-value')
-                    raise StopIteration('jqsh channel has terminated')
-                tokens.append(token)
-                try:
-                    return jqsh.parser.parse_json(tokens, allow_extension_types=True)
-                except jqsh.parser.Incomplete:
-                    continue
+            if self.terminated:
+                raise StopIteration('jqsh channel has terminated')
+            value = self.value_queue.get()
+            if isinstance(value, Terminator):
+                self.terminated = True
+                raise StopIteration('jqsh channel has terminated')
+            self.store_value(value)
+            return value
     
     def __truediv__(self, other):
         """Splits the channel into multiple channels:
@@ -75,37 +79,38 @@ class Channel:
         The original channel will appear to be terminated immediately, and the split channels will terminate when the original channel is actually terminated.
         The split channels are returned as a tuple.
         """
+        import jqsh.filter
+        
         def spread_values(split_channels):
             while True:
-                token = self.values.get()
-                if isinstance(token, Terminator):
+                value = self.value_queue.get()
+                if isinstance(value, Terminator):
                     for chan in split_channels:
                         chan.terminate()
                     break
+                self.store_value(value)
                 for chan in split_channels:
-                    chan.push(token)
+                    chan.push(value)
         
         try:
             other = int(other)
         except:
             return NotImplemented
-        buffered_tokens = []
+        buffered_values = []
         with self.output_lock:
             if self.terminated:
                 return tuple([Channel(terminated=True)] * other)
             self.terminated = True
-            self.values.put(Terminator())
+            self.value_queue.put(Terminator())
             while True:
-                token = self.values.get()
-                if isinstance(token, Terminator):
+                value = self.value_queue.get()
+                if isinstance(value, Terminator):
                     break
-                else:
-                    buffered_tokens.append(token)
-        ret = [Channel(*buffered_tokens) for _ in range(other)]
+                self.store_value(value)
+                buffered_values.append(value)
+        ret = [Channel(*buffered_values) for _ in range(other)]
         threading.Thread(target=spread_values, args=(ret,)).start()
-        threading.Thread(target=jqsh.filter.Filter.handle_namespace, kwargs={'namespace_name': 'global_namespace', 'input_channel': self, 'output_channels': ret}).start()
-        threading.Thread(target=jqsh.filter.Filter.handle_namespace, kwargs={'namespace_name': 'local_namespace', 'input_channel': self, 'output_channels': ret}).start()
-        threading.Thread(target=jqsh.filter.Filter.handle_namespace, kwargs={'namespace_name': 'format_strings', 'input_channel': self, 'output_channels': ret}).start()
+        threading.Thread(target=self.push_namespaces, args=tuple(ret)).start()
         return tuple(ret)
     
     @property
@@ -138,23 +143,32 @@ class Channel:
         self._format_strings = value
         self.has_format_strings.set()
     
-    def get_namespaces(self, from_channel):
-        self.global_namespace = from_channel.global_namespace
-        self.local_namespace = from_channel.local_namespace
-        self.format_strings = from_channel.format_strings
+    @property
+    def context(self):
+        self.has_context.wait()
+        return self._context
+    
+    @context.setter
+    def context(self, value):
+        self._context = value
+        self.has_context.set()
+    
+    def get_namespaces(self, from_channel, include_context=True):
+        from_channel.push_namespaces(self, include_context=include_context)
     
     def namespaces(self):
         return self.global_namespace, self.local_namespace, self.format_strings
     
     def pop(self, wait=True):
-        """Returns a token. Raises queue.Empty if no element is currently available, and StopIteration if the channel is terminated."""
+        """Returns a value. Raises queue.Empty if no element is currently available, and StopIteration if the channel is terminated."""
         with self.output_lock:
             if self.terminated:
                 raise StopIteration('jqsh channel has terminated')
-            ret = self.values.get(block=wait)
+            ret = self.value_queue.get(block=wait)
             if isinstance(ret, Terminator):
                 self.terminated = True
                 raise StopIteration('jqsh channel has terminated')
+            self.store_value(ret)
         return ret
     
     def pull(self, from_channel, terminate=True):
@@ -168,27 +182,41 @@ class Channel:
             self.input_lock.acquire()
         while True:
             try:
-                token = from_channel.pop()
+                value = from_channel.pop()
             except StopIteration:
                 break
-            self.values.put(token)
+            self.value_queue.put(value)
         if terminate:
-            self.values.put(Terminator())
+            self.value_queue.put(Terminator())
         else:
             self.input_lock.release()
     
+    @coerce_other
     def push(self, value):
-        if isinstance(value, jqsh.parser.Token):
-            with self.input_lock:
-                if self.input_terminated:
-                    raise RuntimeError('jqsh channel has terminated')
-                self.values.put(value)
-        else:
-            with self.input_lock:
-                for token in jqsh.parser.json_to_tokens(value, allow_extension_types=True):
-                    self.values.put(token)
+        with self.input_lock:
+            if self.input_terminated:
+                raise RuntimeError('jqsh channel has terminated')
+            self.value_queue.put(value)
+    
+    def push_attribute(self, attribute_name, *output_channels):
+        """Waits until the attribute is available, then passes it unchanged to the output channels. Used by Filter.run_raw and Channel.push_namespaces."""
+        attribute_value = getattr(self, attribute_name)
+        for chan in output_channels:
+            setattr(chan, attribute_name, attribute_value)
+    
+    def push_namespaces(self, *output_channels, include_context=True):
+        threads = []
+        for attribute_name in ['global_namespace', 'local_namespace', 'format_strings'] + (['context'] if include_context else []):
+            thread = threading.Thread(target=self.push_attribute, args=(attribute_name,) + output_channels)
+            thread.start()
+            threads.append(thread)
+        for thread in threads:
+            thread.join()
+    
+    def store_value(self, value):
+        pass # subclass this if required, by default channels don't store values
     
     def terminate(self):
         with self.input_lock:
             self.input_terminated = True
-            self.values.put(Terminator())
+            self.value_queue.put(Terminator())

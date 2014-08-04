@@ -1,11 +1,12 @@
 import sys
 
-import jqsh
+import blessings
 import jqsh.filter
 import jqsh.parser
 import jqsh.values
 
 def print_output(filter_thread, output_file=None):
+    terminal = blessings.Terminal()
     if output_file is None:
         output_file = sys.stdout
     if isinstance(filter_thread, jqsh.filter.Filter):
@@ -13,16 +14,9 @@ def print_output(filter_thread, output_file=None):
     filter_thread.start()
     while True:
         try:
-            token = filter_thread.output_channel.pop()
+            value = filter_thread.output_channel.pop()
         except StopIteration:
             break
-        if isinstance(token, jqsh.values.JQSHException):
-            token.print(output_file=output_file)
-            break
-        else:
-            print(syntax_highlight(token), end='', file=output_file, flush=True)
+        for line in value.syntax_highlight_lines(terminal):
+            print(line, file=output_file, flush=True)
     return filter_thread.output_channel.namespaces()
-
-def syntax_highlight(token):
-    #TODO add actual highlighting
-    return str(token)

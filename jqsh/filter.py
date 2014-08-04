@@ -2,12 +2,13 @@ import sys
 
 import copy
 import decimal
-import jqsh
+import itertools
 import jqsh.channel
 import jqsh.functions
 import jqsh.values
 import subprocess
 import threading
+import traceback
 
 class NotAllowed(Exception):
     pass
@@ -31,13 +32,6 @@ class Filter:
         """The filter's representation in jqsh."""
         return ''
     
-    @staticmethod
-    def handle_namespace(namespace_name, input_channel, output_channels):
-        """Waits until the namespace is available in the input channel, then passes it unchanged to the output channels. Used by run_raw."""
-        namespace_value = getattr(input_channel, namespace_name)
-        for chan in output_channels:
-            setattr(chan, namespace_name, namespace_value)
-    
     def assign(self, value_channel, input_channel, output_channel):
         raise NotImplementedError('cannot assign to this filter')
     
@@ -58,37 +52,27 @@ class Filter:
                     if isinstance(value, jqsh.values.JQSHException):
                         break
             except Exception as e:
-                output_channel.push(jqsh.values.JQSHException('internal', python_exception=e, exc_info=sys.exc_info()))
+                output_channel.push(jqsh.values.JQSHException('internal', python_exception=e, exc_info=sys.exc_info(), traceback_string=traceback.format_exc()))
         
         bridge_channel = jqsh.channel.Channel()
         helper_thread = threading.Thread(target=run_thread, kwargs={'bridge': bridge_channel})
-        handle_globals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'global_namespace', 'input_channel': input_channel, 'output_channels': [bridge_channel, output_channel]})
-        handle_locals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'local_namespace', 'input_channel': input_channel, 'output_channels': [bridge_channel, output_channel]})
-        handle_format_strings = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'format_strings', 'input_channel': input_channel, 'output_channels': [bridge_channel, output_channel]})
+        handle_namespaces = threading.Thread(target=input_channel.push_namespaces, args=(bridge_channel, output_channel))
         helper_thread.start()
-        handle_globals.start()
-        handle_locals.start()
-        handle_format_strings.start()
-        while True:
-            try:
-                token = input_channel.pop()
-            except StopIteration:
-                break
-            bridge_channel.push(token)
-            if isinstance(token, jqsh.values.JQSHException):
-                output_channel.push(token)
+        handle_namespaces.start()
+        for value in input_channel:
+            bridge_channel.push(value)
+            if isinstance(value, jqsh.values.JQSHException):
+                output_channel.push(value)
                 break
         bridge_channel.terminate()
         helper_thread.join()
-        handle_globals.join()
-        handle_locals.join()
-        handle_format_strings.join()
+        handle_namespaces.join()
         output_channel.terminate()
     
     def sensible_string(self, input_channel=None):
         ret = next(self.start(input_channel))
-        if isinstance(ret, str):
-            return ret
+        if isinstance(ret, jqsh.values.String):
+            return ret.value
         else:
             raise TypeError('got a ' + ret.__class__.__name__ + ', expected a string')
     
@@ -115,7 +99,24 @@ class Array(Parens):
         return '[' + str(self.attribute) + ']'
     
     def run(self, input_channel):
-        yield list(self.attribute.start(input_channel))
+        yield jqsh.values.Array(self.attribute.start(input_channel))
+
+class Object(Parens):
+    def __str__(self):
+        return '{' + str(self.attribute) + '}'
+    
+    def run(self, input_channel):
+        #TODO handle shorthand keys and sensible strings
+        obj = jqsh.values.Object(terminated=False)
+        for value in self.attribute.start(input_channel):
+            try:
+                obj.push(value)
+            except TypeError:
+                yield jqsh.values.JQSHException('type')
+            except ValueError:
+                yield jqsh.values.JQSHException('length')
+        obj.terminate()
+        yield obj
 
 class Name(Filter):
     def __init__(self, name):
@@ -136,8 +137,8 @@ class Name(Filter):
                     break
             output_channel.terminate()
         
-        handle_globals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'global_namespace', 'input_channel': input_channel, 'output_channels': [output_channel]})
-        handle_format_strings = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'format_strings', 'input_channel': input_channel, 'output_channels': [output_channel]})
+        handle_globals = threading.Thread(target=input_channel.push_attribute, args=('global_namespace', output_channel))
+        handle_format_strings = threading.Thread(target=input_channel.push_attribute, args=('format_strings', output_channel))
         handle_values = threading.Thread(target=handle_values)
         handle_globals.start()
         handle_format_strings.start()
@@ -157,12 +158,8 @@ class Name(Filter):
         handle_values.join()
     
     def run_raw(self, input_channel, output_channel):
-        handle_globals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'global_namespace', 'input_channel': input_channel, 'output_channels': [output_channel]})
-        handle_locals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'local_namespace', 'input_channel': input_channel, 'output_channels': [output_channel]})
-        handle_format_strings = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'format_strings', 'input_channel': input_channel, 'output_channels': [output_channel]})
-        handle_globals.start()
-        handle_locals.start()
-        handle_format_strings.start()
+        handle_namespaces = threading.Thread(target=input_channel.push_namespaces, args=(output_channel,))
+        handle_namespaces.start()
         if self.name in input_channel.local_namespace:
             for value in input_channel.local_namespace[self.name]:
                 output_channel.push(value)
@@ -175,9 +172,7 @@ class Name(Filter):
                 output_channel.terminate()
             else:
                 builtin(input_channel=input_channel, output_channel=output_channel)
-        handle_globals.join()
-        handle_locals.join()
-        handle_format_strings.join()
+        handle_namespaces.join()
     
     def sensible_string(self, input_channel=None):
         return self.name
@@ -185,7 +180,7 @@ class Name(Filter):
 class NumberLiteral(Filter):
     def __init__(self, number):
         self.number_string = str(number)
-        self.number = number if isinstance(number, decimal.Decimal) else decimal.Decimal(number)
+        self.number = jqsh.values.Number(number)
     
     def __repr__(self):
         return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(self.number_string) + ')'
@@ -194,7 +189,7 @@ class NumberLiteral(Filter):
         return self.number_string
     
     def run(self, input_channel):
-        yield decimal.Decimal(self.number)
+        yield jqsh.values.Number(self.number)
 
 class StringLiteral(Filter):
     def __init__(self, text):
@@ -232,7 +227,7 @@ class StringLiteral(Filter):
         return '"' + ''.join(StringLiteral.escape(character) for character in str(the_string)) + '"'
     
     def run(self, input_channel):
-        yield self.text
+        yield jqsh.values.String(self.text)
 
 class Operator(Filter):
     """Abstract base class for operator filters."""
@@ -262,7 +257,7 @@ class Operator(Filter):
             for i in range(max(len(left_output), len(right_output))):
                 yield left_output[i % len(left_output)], right_output[i % len(right_output)]
 
-class Pipe(Operator):
+class Pipe(Operator): #TODO add correct namespace handling
     operator_string = ' | '
     
     def run(self, input_channel):
@@ -279,9 +274,13 @@ class Add(Operator):
             else:
                 yield output
                 continue
-            if any(all(isinstance(output, value_type) for output in (left_output, right_output)) for value_type in (decimal.Decimal, list, str)):
-                yield left_output + right_output
-            elif all(isinstance(output, dict) for output in (left_output, right_output)):
+            if isinstance(left_output, jqsh.values.Number) and isinstance(right_output, jqsh.values.Number):
+                yield jqsh.values.Number(left_output + right_output)
+            elif isinstance(left_output, jqsh.values.Array) and isinstance(right_output, jqsh.values.Array):
+                yield jqsh.values.Array(itertools.chain(left_output, right_output))
+            elif isinstance(left_output, jqsh.values.String) and isinstance(right_output, jqsh.values.String):
+                yield jqsh.values.String(left_output.value + right_output.value)
+            elif all(isinstance(output, jqsh.values.Object) for output in (left_output, right_output)): #TODO fix object handling
                 ret = copy.copy(left_output)
                 ret.update(right_output)
                 yield ret
@@ -313,6 +312,7 @@ class Apply(Operator):
     
     def run_raw(self, input_channel, output_channel):
         if all(attribute.__class__ == Filter for attribute in self.attributes): # identity function
+            output_channel.get_namespaces(input_channel)
             output_channel.pull(input_channel)
         elif len(self.attributes) == 2 and all(attribute.__class__ == NumberLiteral for attribute in self.attributes): # decimal number
             output_channel.push(decimal.Decimal(str(self.attributes[0]) + '.' + str(self.attributes[1])))
@@ -402,9 +402,14 @@ class Multiply(Operator):
             else:
                 yield output
                 continue
-            if isinstance(left_output, decimal.Decimal) and isinstance(right_output, decimal.Decimal):
-                yield left_output * right_output
-            elif any(isinstance(left_output, value_type) for value_type in (list, str)) and isinstance(right_output, decimal.Decimal):
+            if isinstance(left_output, jqsh.values.Number) and isinstance(right_output, jqsh.values.Number):
+                yield jqsh.values.Number(left_output * right_output)
+            elif isinstance(left_output, jqsh.values.String and isinstance(right_output, jqsh.values.Number):
+                if right_output % 1 == 0:
+                    yield left_output * int(right_output)
+                else:
+                    yield jqsh.values.JQSHException('integer')
+            elif isinstance(left_output, jqsh.values.Array and isinstance(right_output, jqsh.values.Number):
                 if right_output % 1 == 0:
                     yield left_output * int(right_output)
                 else:
@@ -416,6 +421,19 @@ class Multiply(Operator):
                     yield jqsh.values.JQSHException('integer')
             else:
                 yield jqsh.values.JQSHException('type')
+
+class Pair(Operator):
+    operator_string = ': '
+    
+    def run(self, input_channel):
+        left_input, right_input = input_channel / 2
+        try:
+            right_output = next(self.right_operand.start(right_input))
+        except StopIteration:
+            yield jqsh.values.JQSHException('empty')
+            return
+        for value in self.left_operand.start(left_input):
+            yield jqsh.values.Array((value, right_output))
 
 class Semicolon(Operator):
     operator_string = '; '
@@ -447,6 +465,7 @@ class Command(UnaryOperator):
     
     def run(self, input_channel):
         import jqsh.parser
+        
         input_channel, attribute_input = input_channel / 2
         try:
             command_name = self.attribute.sensible_string(attribute_input)
@@ -462,7 +481,7 @@ class Command(UnaryOperator):
             yield jqsh.values.JQSHException('permission')
             return
         for value in input_channel:
-            popen.stdin.write(b''.join(str(token).encode('utf-8') for token in jqsh.parser.json_to_tokens(value, indent_width=None)))
+            popen.stdin.write(b''.join(str(value).encode('utf-8') for token in jqsh.parser.json_to_tokens(value, indent_width=None)))
         popen.stdin.write(b'\x04')
         try:
             yield from jqsh.parser.parse_json_values(popen.stdout.read().decode('utf-8'))

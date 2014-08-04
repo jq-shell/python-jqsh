@@ -1,6 +1,6 @@
 import decimal
 import enum
-import jqsh
+import jqsh.context
 import jqsh.filter
 import jqsh.values
 import string
@@ -114,6 +114,9 @@ operators = [
         TokenType.plus: jqsh.filter.Add
     },
     {
+        TokenType.colon: jqsh.filter.Pair
+    },
+    {
         TokenType.comma: jqsh.filter.Comma
     },
     {
@@ -130,6 +133,7 @@ operators = [
 
 paren_filters = {
     TokenType.open_array: jqsh.filter.Array,
+    TokenType.open_object: jqsh.filter.Object,
     TokenType.open_paren: jqsh.filter.Parens
 }
 
@@ -201,7 +205,7 @@ def json_to_tokens(json_value, *, allow_extension_types=False, indent_level=0, i
     else:
         yield Token(TokenType.illegal)
 
-def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}):
+def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}, context=jqsh.context.FilterContext()):
     def filter_is_allowed(the_filter):
         if isinstance(allowed_filters, dict):
             if the_filter.__class__ in allowed_filters:
@@ -321,7 +325,7 @@ def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}):
     if len(tokens) == 1 and isinstance(tokens[0], jqsh.filter.Filter):
         return tokens[0] # finished parsing
     else:
-        raise SyntaxError('could not parse token list: ' + repr(tokens))
+        raise SyntaxError('Could not parse token list: ' + repr(tokens))
 
 def parse_json(tokens, allow_extension_types=False):
     if isinstance(tokens, str):
@@ -330,91 +334,100 @@ def parse_json(tokens, allow_extension_types=False):
         raise Incomplete('JSON is empty')
     if isinstance(tokens[-1], Token) and tokens[-1].type is TokenType.trailing_whitespace:
         tokens.pop()
-    ret = None
-    key_path = []
+    ret_path = []
+    key = None
     token_index = 0
     while token_index < len(tokens):
         token = tokens[token_index]
-        if isinstance(token, jqsh.values.JQSHException):
-            ret = set_value_at_key_path(ret, key_path, token)
+        if allow_extension_types and isinstance(token, jqsh.values.Value):
+            ret_path = set_value_at_ret_path(ret_path, key, token)
             token_index += 1
         elif token.type is TokenType.name:
             if token.text == 'false':
-                ret = set_value_at_key_path(ret, key_path, False)
+                ret_path = set_value_at_ret_path(ret_path, key, jqsh.values.Boolean(False))
                 token_index += 1
             elif token.text == 'null':
-                ret = set_value_at_key_path(ret, key_path, None)
+                ret_path = set_value_at_ret_path(ret_path, key, jqsh.values.Null())
                 token_index += 1
             elif token.text == 'true':
-                ret = set_value_at_key_path(ret, key_path, True)
+                ret_path = set_value_at_ret_path(ret_path, key, jqsh.values.Boolean(True))
                 token_index += 1
             else:
-                raise SyntaxError('illegal name token ' + repr(token.text) + ' at position ' + repr(token_index) + ' (expected false, null, or true)')
+                raise SyntaxError('Illegal name token ' + repr(token.text) + ' at position ' + repr(token_index) + ' (expected false, null, or true)')
         elif token.type is TokenType.number:
-            ret = set_value_at_key_path(ret, key_path, decimal.Decimal(token.text))
+            ret_path = set_value_at_ret_path(ret_path, key, jqsh.values.Number(token.text))
             token_index += 1
         elif token.type is TokenType.open_array:
-            ret = set_value_at_key_path(ret, key_path, [])
+            array = jqsh.values.Array(terminated=False)
+            ret_path = set_value_at_ret_path(ret_path, key, array)
             token_index += 1
             if token_index >= len(tokens):
-                raise Incomplete('unclosed JSON array at key_path ' + repr(key_path))
-            if tokens[token_index].type is TokenType.close_array:
-                token_index += 1 # empty array parsed
+                raise Incomplete('Unclosed JSON array at position ' + str(token_index))
+            if tokens[token_index].type is TokenType.close_array: # empty array parsed
+                array.terminate()
+                token_index += 1
             else:
-                key_path.append(0)
+                ret_path.append(array)
                 continue
         elif token.type is TokenType.open_object:
-            ret = set_value_at_key_path(ret, key_path, {})
+            obj = jqsh.values.Object(terminated=False)
+            ret_path = set_value_at_ret_path(ret_path, key, obj)
             token_index += 1
             if token_index >= len(tokens):
-                raise Incomplete('unclosed JSON object at key path ' + repr(key_path))
+                raise Incomplete('Unclosed JSON object at position ' + str(token_index))
             token = tokens[token_index]
-            if token.type is TokenType.close_object:
-                token_index += 1 # empty object parsed
+            if token.type is TokenType.close_object: # empty object parsed
+                obj.terminate()
+                token_index += 1
             elif token.type is TokenType.string:
-                key_path.append(token.text)
+                ret_path.append(obj)
+                key = token.text
                 token_index += 1
                 if token_index >= len(tokens):
-                    raise Incomplete('unclosed JSON object at key path ' + repr(key_path[:-1]))
+                    raise Incomplete('Unclosed JSON object at position ' + str(token_index))
                 elif tokens[token_index].type is not TokenType.colon:
                     raise illegal_token_exception(token, position=token_index, expected={TokenType.colon})
                 else:
                     token_index += 1
                     if token_index >= len(tokens):
-                        raise Incomplete('unclosed JSON object at key path ' + repr(key_path[:-1]))
+                        raise Incomplete('Unclosed JSON object at position ' + str(token_index))
                     continue
             else:
                 raise illegal_token_exception(token, position=token_index, expected={TokenType.close_object, TokenType.string})
         elif token.type is TokenType.string:
-            ret = set_value_at_key_path(ret, key_path, token.text)
+            ret_path = set_value_at_ret_path(ret_path, key, token.text)
             token_index += 1
         else:
             raise illegal_token_exception(token, position=token_index, expected={TokenType.name, TokenType.number, TokenType.open_array, TokenType.open_object, TokenType.string, TokenType.trailing_whitespace})
         keep_closing = True
-        while keep_closing and len(key_path):
-            if isinstance(key_path[-1], str): # we are in an object, get the next key or close it
+        while keep_closing and len(ret_path):
+            if isinstance(ret_path[-1], jqsh.values.Object): # we are in an object, get the next key or close it
                 if token_index >= len(tokens):
-                    raise Incomplete('unclosed JSON object at key path ' + repr(key_path[:-1]))
+                    raise Incomplete('Unclosed JSON object at position ' + str(token_index))
                 token = tokens[token_index]
                 if token.type is TokenType.close_object:
-                    key_path.pop()
+                    ret_path[-1].terminate()
+                    if len(ret_path) == 1:
+                        keep_closing = False
+                    else:
+                        ret_path.pop()
                     token_index += 1
                 elif token.type is TokenType.comma:
                     token_index += 1
                     if token_index >= len(tokens):
-                        raise Incomplete('unclosed JSON object at key path ' + repr(key_path[:-1]))
+                        raise Incomplete('Unclosed JSON object at position ' + str(token_index))
                     token = tokens[token_index]
                     if token.type is TokenType.string:
-                        key_path[-1] = token.text
+                        key = token.text
                         token_index += 1
                         if token_index >= len(tokens):
-                            raise Incomplete('unclosed JSON object at key path ' + repr(key_path[:-1]))
+                            raise Incomplete('Unclosed JSON object at position ' + str(token_index))
                         elif tokens[token_index].type is not TokenType.colon:
                             raise illegal_token_exception(token, position=token_index, expected={TokenType.colon})
                         else:
                             token_index += 1
                             if token_index >= len(tokens):
-                                raise Incomplete('unclosed JSON object at key path ' + repr(key_path[:-1]))
+                                raise Incomplete('Unclosed JSON object at position ' + str(token_index))
                             keep_closing = False
                     else:
                         raise illegal_token_exception(token, position=token_index, expected={TokenType.string})
@@ -422,22 +435,25 @@ def parse_json(tokens, allow_extension_types=False):
                     raise illegal_token_exception(token, position=token_index, expected={TokenType.close_object, TokenType.comma})
             else: # we are in an array, check if it continues
                 if token_index >= len(tokens):
-                    raise Incomplete('unclosed JSON array at key path ' + repr(key_path[:-1]))
+                    raise Incomplete('Unclosed JSON array at position ' + str(token_index))
                 token = tokens[token_index]
                 if token.type is TokenType.close_array:
-                    key_path.pop()
+                    ret_path[-1].terminate()
+                    if len(ret_path) == 1:
+                        keep_closing = False
+                    else:
+                        ret_path.pop()
                     token_index += 1
                 elif token.type is TokenType.comma:
-                    key_path[-1] += 1
                     token_index += 1
                     if token_index >= len(tokens):
-                        raise Incomplete('unclosed JSON array at key path ' + repr(key_path[:-1]))
+                        raise Incomplete('Unclosed JSON array at position ' + str(token_index))
                     keep_closing = False
                 else:
                     raise illegal_token_exception(token, position=token_index, expected={TokenType.close_array, TokenType.comma})
     if token_index < len(tokens):
-        raise SyntaxError('multiple top-level JSON values found')
-    return ret
+        raise SyntaxError('Multiple top-level JSON values found')
+    return ret_path[0]
 
 def parse_json_values(tokens):
     if isinstance(tokens, str):
@@ -457,18 +473,15 @@ def parse_json_values(tokens):
             last_exception = e
             prefix_length += 1
 
-def set_value_at_key_path(structure, key_path, value):
-    if len(key_path):
-        substructure = structure
-        for key in key_path[:-1]:
-            substructure = substructure[key]
-        if isinstance(key_path[-1], int) and len(substructure) == key_path[-1]:
-            substructure.append(value)
+def set_value_at_ret_path(ret_path, key, value):
+    if len(ret_path):
+        if isinstance(ret_path[-1], jqsh.values.Object):
+            ret_path[-1].push((key, value))
         else:
-            substructure[key_path[-1]] = value
-        return structure
+            ret_path[-1].push(value)
+        return ret_path
     else:
-        return value
+        return [value]
 
 def tokenize(jqsh_string):
     def shift(rest_string, line, column, amount=1):

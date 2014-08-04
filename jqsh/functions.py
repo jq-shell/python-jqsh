@@ -1,7 +1,6 @@
 import collections
 import decimal
 import functools
-import jqsh
 import jqsh.channel
 import jqsh.filter
 import jqsh.values
@@ -46,13 +45,9 @@ def wrap_builtin(f):
         
         bridge_channel = jqsh.channel.Channel()
         helper_thread = threading.Thread(target=run_thread, kwargs={'bridge': bridge_channel})
-        handle_globals = threading.Thread(target=jqsh.filter.Filter.handle_namespace, kwargs={'namespace_name': 'global_namespace', 'input_channel': input_channel, 'output_channels': [bridge_channel, output_channel]})
-        handle_locals = threading.Thread(target=jqsh.filter.Filter.handle_namespace, kwargs={'namespace_name': 'local_namespace', 'input_channel': input_channel, 'output_channels': [bridge_channel, output_channel]})
-        handle_format_strings = threading.Thread(target=jqsh.filter.Filter.handle_namespace, kwargs={'namespace_name': 'format_strings', 'input_channel': input_channel, 'output_channels': [bridge_channel, output_channel]})
+        handle_namespaces = threading.Thread(target=input_channel.push_namespaces, args=(bridge_channel, output_channel))
         helper_thread.start()
-        handle_globals.start()
-        handle_locals.start()
-        handle_format_strings.start()
+        handle_namespaces.start()
         while True:
             try:
                 token = input_channel.pop()
@@ -64,9 +59,7 @@ def wrap_builtin(f):
                 break
         bridge_channel.terminate()
         helper_thread.join()
-        handle_globals.join()
-        handle_locals.join()
-        handle_format_strings.join()
+        handle_namespaces.join()
         output_channel.terminate()
     return wrapper
 
