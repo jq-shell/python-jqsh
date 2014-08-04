@@ -1,3 +1,4 @@
+import contextlib
 import functools
 import jqsh.context
 import queue
@@ -220,3 +221,21 @@ class Channel:
         with self.input_lock:
             self.input_terminated = True
             self.value_queue.put(Terminator())
+    
+    def throw(self, exception):
+        """Tries to append the exception onto the channel, failing silently if terminated, then defines all properties for which events are defined, and terminates."""
+        import jqsh.values
+        
+        if isinstance(exception, str) or isinstance(exception, jqsh.values.String):
+            exception = jqsh.values.JQSHException(exception)
+        with contextlib.suppress(RuntimeError):
+            self.push(exception)
+        if self._globals is None:
+            self.global_namespace = {}
+        if self._locals is None:
+            self.local_namespace = {}
+        if self._format_strings is None:
+            self.format_strings = {}
+        if self._context is None:
+            self.context = jqsh.context.FilterContext()
+        self.terminate()

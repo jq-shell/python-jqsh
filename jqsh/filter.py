@@ -53,7 +53,7 @@ class Filter:
                     if isinstance(value, jqsh.values.JQSHException):
                         break
             except Exception as e:
-                output_channel.push(jqsh.values.JQSHException('internal', python_exception=e, exc_info=sys.exc_info(), traceback_string=traceback.format_exc()))
+                output_channel.throw(jqsh.values.JQSHException('internal', python_exception=e, exc_info=sys.exc_info(), traceback_string=traceback.format_exc()))
         
         bridge_channel = jqsh.channel.Channel()
         helper_thread = threading.Thread(target=run_thread, kwargs={'bridge': bridge_channel})
@@ -63,7 +63,7 @@ class Filter:
         for value in input_channel:
             bridge_channel.push(value)
             if isinstance(value, jqsh.values.JQSHException):
-                output_channel.push(value)
+                output_channel.throw(value)
                 break
         bridge_channel.terminate()
         helper_thread.join()
@@ -130,25 +130,19 @@ class Name(Filter):
         return self.name
     
     def assign(self, value_channel, input_channel, output_channel):
-        def handle_values():
-            while True:
-                try:
-                    output_channel.push(input_channel.pop())
-                except StopIteration:
-                    break
-            output_channel.terminate()
-        
         handle_globals = threading.Thread(target=input_channel.push_attribute, args=('global_namespace', output_channel))
         handle_format_strings = threading.Thread(target=input_channel.push_attribute, args=('format_strings', output_channel))
-        handle_values = threading.Thread(target=handle_values)
+        handle_context = threading.Thread(target=input_channel.push_attribute, args=('context', output_channel))
+        handle_values = threading.Thread(target=output_channel.pull, args=(input_channel,))
         handle_globals.start()
         handle_format_strings.start()
+        handle_context.start()
         handle_values.start()
         input_locals = copy.copy(input_channel.local_namespace)
         var = list(value_channel)
         for value in var:
             if isinstance(value, jqsh.values.JQSHException):
-                output_channel.push(value)
+                output_channel.throw(value)
                 break
         else:
             input_locals[self.name] = var
@@ -156,24 +150,24 @@ class Name(Filter):
         output_channel.terminate()
         handle_globals.join()
         handle_format_strings.join()
+        handle_context.join()
         handle_values.join()
     
     def run_raw(self, input_channel, output_channel):
-        handle_namespaces = threading.Thread(target=input_channel.push_namespaces, args=(output_channel,))
-        handle_namespaces.start()
         if self.name in input_channel.local_namespace:
+            handle_namespaces = threading.Thread(target=input_channel.push_namespaces, args=(output_channel,))
+            handle_namespaces.start()
             for value in input_channel.local_namespace[self.name]:
                 output_channel.push(value)
             output_channel.terminate()
+            handle_namespaces.join()
         else:
             try:
                 builtin = jqsh.functions.get_builtin(self.name)
             except KeyError:
-                output_channel.push(jqsh.values.JQSHException('numArgs', function_name=self.name, expected=set(jqsh.functions.builtin_functions[self.name]), received=0) if self.name in jqsh.functions.builtin_functions else jqsh.values.JQSHException('name', missing_name=self.name))
-                output_channel.terminate()
+                output_channel.throw(jqsh.values.JQSHException('numArgs', function_name=self.name, expected=set(jqsh.functions.builtin_functions[self.name]), received=0) if self.name in jqsh.functions.builtin_functions else jqsh.values.JQSHException('name', missing_name=self.name))
             else:
                 builtin(input_channel=input_channel, output_channel=output_channel)
-        handle_namespaces.join()
     
     def sensible_string(self, input_channel=None):
         return self.name
@@ -326,29 +320,32 @@ class Apply(Operator):
             try:
                 key = next(self.attributes[1].start(key_input))
             except StopIteration:
-                output_channel.push(jqsh.values.JQSHException('empty'))
-                output_channel.terminate()
-                output_channel.get_namespaces(input_channel)
+                output_channel.throw('empty')
                 return
             for value in input_channel:
                 if isinstance(value, dict):
                     if key in value:
                         output_channel.push(value[key])
                     else:
-                        output_channel.push(jqsh.values.JQSHException('key'))
+                        output_channel.throw('key')
+                        return
                 elif isinstance(value, list):
                     if isinstance(key, decimal.Decimal):
                         if key % 1 == 0:
                             try:
                                 output_channel.push(value[int(key)])
                             except IndexError:
-                                output_channel.push(jqsh.values.JQSHException('index'))
+                                output_channel.throw('index')
+                                return
                         else:
-                            output_channel.push(jqsh.values.JQSHException('integer'))
+                            output_channel.throw('integer')
+                            return
                     else:
-                        output_channel.push(jqsh.values.JQSHException('type'))
+                        output_channel.throw('type')
+                        return
                 else:
-                    output_channel.push(jqsh.values.JQSHException('type'))
+                    output_channel.throw('type')
+                    return
             output_channel.terminate()
             output_channel.get_namespaces(input_channel)
             return
@@ -357,16 +354,12 @@ class Apply(Operator):
             try:
                 function_name = self.attributes[0].sensible_string(input_channel=string_input)
             except (StopIteration, TypeError):
-                output_channel.push(jqsh.values.JQSHException('sensibleString'))
-                output_channel.terminate()
-                output_channel.get_namespaces(input_channel)
+                output_channel.throw('sensibleString')
                 return
             try:
                 builtin = jqsh.functions.get_builtin(function_name, *self.attributes[1:])
             except KeyError:
-                output_channel.push(jqsh.values.JQSHException('numArgs') if function_name in jqsh.functions.builtin_functions else jqsh.values.JQSHException('name', missing_name=function_name))
-                output_channel.terminate()
-                output_channel.get_namespaces(input_channel)
+                output_channel.throw(jqsh.values.JQSHException('numArgs') if function_name in jqsh.functions.builtin_functions else jqsh.values.JQSHException('name', missing_name=function_name))
                 return
             else:
                 builtin(*self.attributes[1:], input_channel=input_channel, output_channel=output_channel)
@@ -379,9 +372,8 @@ class Assign(Operator):
         try:
             self.left_operand.assign(self.right_operand.start(input_channel), input_channel=assignment_input, output_channel=output_channel)
         except NotImplementedError:
-            output_channel.push(jqsh.values.JQSHException('assignment', target_filter=self.left_operand))
-            output_channel.get_namespaces(input_channel)
-            output_channel.terminate()
+            output_channel.throw(jqsh.values.JQSHException('assignment', target_filter=self.left_operand))
+            return
 
 class Comma(Operator):
     def __str__(self):
@@ -498,30 +490,24 @@ class GlobalVariable(UnaryOperator):
     operator_string = '$'
     
     def assign(self, value_channel, input_channel, output_channel):
-        def handle_values():
-            while True:
-                try:
-                    output_channel.push(input_channel.pop())
-                except StopIteration:
-                    break
-            output_channel.terminate()
-        
-        handle_locals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'local_namespace', 'input_channel': input_channel, 'output_channels': [output_channel]})
-        handle_format_strings = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'format_strings', 'input_channel': input_channel, 'output_channels': [output_channel]})
-        handle_values = threading.Thread(target=handle_values)
+        handle_locals = threading.Thread(target=input_channel.push_attribute, args=('local_namespace', output_channel))
+        handle_format_strings = threading.Thread(target=input_channel.push_attribute, args=('format_strings', output_channel))
+        handle_context = threading.Thread(target=input_channel.push_attribute, args=('context', output_channel))
+        handle_values = threading.Thread(target=output_channel.pull, args=(input_channel,))
         handle_locals.start()
         handle_format_strings.start()
+        handle_context.start()
         handle_values.start()
         input_globals = copy.copy(input_channel.global_namespace)
         try:
             variable_name = self.attribute.sensible_string(input_channel)
         except (StopIteration, TypeError):
-            output_channel.push(jqsh.values.JQSHException('sensibleString'))
+            output_channel.throw('sensibleString')
         else:
             var = list(value_channel)
             for value in var:
                 if isinstance(value, jqsh.values.JQSHException):
-                    output_channel.push(value)
+                    output_channel.throw(value)
                     break
             else:
                 input_globals[variable_name] = var
@@ -529,26 +515,21 @@ class GlobalVariable(UnaryOperator):
         output_channel.terminate()
         handle_locals.join()
         handle_format_strings.join()
+        handle_context.join()
         handle_values.join()
     
     def run_raw(self, input_channel, output_channel):
-        handle_globals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'global_namespace', 'input_channel': input_channel, 'output_channels': [output_channel]})
-        handle_locals = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'local_namespace', 'input_channel': input_channel, 'output_channels': [output_channel]})
-        handle_format_strings = threading.Thread(target=self.handle_namespace, kwargs={'namespace_name': 'format_strings', 'input_channel': input_channel, 'output_channels': [output_channel]})
-        handle_globals.start()
-        handle_locals.start()
-        handle_format_strings.start()
+        handle_namespaces = threading.Thread(target=input_channel.push_namespaces, args=(output_channel,))
+        handle_namespaces.start()
         try:
             variable_name = self.attribute.sensible_string(input_channel)
         except (StopIteration, TypeError):
-            output_channel.push(jqsh.values.JQSHException('sensibleString'))
+            output_channel.throw('sensibleString')
         else:
             if variable_name in input_channel.global_namespace:
                 for value in input_channel.global_namespace[variable_name]:
                     output_channel.push(value)
             else:
-                output_channel.push(jqsh.values.JQSHException('name', missing_name=variable_name))
+                output_channel.throw(jqsh.values.JQSHException('name', missing_name=variable_name))
         output_channel.terminate()
-        handle_globals.join()
-        handle_locals.join()
-        handle_format_strings.join()
+        handle_namespaces.join()
