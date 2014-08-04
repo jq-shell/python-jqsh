@@ -18,8 +18,8 @@ $fibStream = def (           # this verison just keeps outputting the Fibonacci 
     )
 );
 
-ifmain (                     # ifmain does nothing if the module is imported, think Python's if __name__ == '__main__'
+if isMain then               # isMain outputs a boolean that is false iff called during an import, think Python's __name__ == '__main__'
     argv 1                   # when called with one argument, argv returns the nth member of the program's argument vector
     | fromjson               # decodes the argument from a JSON string, in this case it should be a number
     | $fib
-)
+end
