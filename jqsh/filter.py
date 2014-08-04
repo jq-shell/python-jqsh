@@ -6,6 +6,7 @@ import itertools
 import jqsh.channel
 import jqsh.functions
 import jqsh.values
+import more_itertools
 import subprocess
 import threading
 import traceback
@@ -404,19 +405,24 @@ class Multiply(Operator):
                 continue
             if isinstance(left_output, jqsh.values.Number) and isinstance(right_output, jqsh.values.Number):
                 yield jqsh.values.Number(left_output * right_output)
-            elif isinstance(left_output, jqsh.values.String and isinstance(right_output, jqsh.values.Number):
+            elif isinstance(left_output, jqsh.values.String) and isinstance(right_output, jqsh.values.Number):
                 if right_output % 1 == 0:
-                    yield left_output * int(right_output)
+                    yield jqsh.values.String(left_output.value * int(right_output))
                 else:
                     yield jqsh.values.JQSHException('integer')
-            elif isinstance(left_output, jqsh.values.Array and isinstance(right_output, jqsh.values.Number):
+            elif isinstance(left_output, jqsh.values.Array) and isinstance(right_output, jqsh.values.Number):
                 if right_output % 1 == 0:
-                    yield left_output * int(right_output)
+                    yield jqsh.values.Array(more_itertools.ncycles(left_output, int(right_output)))
                 else:
                     yield jqsh.values.JQSHException('integer')
-            elif isinstance(left_output, decimal.Decimal) and any(isinstance(right_output, value_type) for value_type in (list, str)):
-                if right_output % 1 == 0:
-                    yield int(left_output) * right_output
+            elif isinstance(left_output, decimal.Decimal) and isinstance(right_output, jqsh.values.String):
+                if left_output % 1 == 0:
+                    yield jqsh.values.String(right_output.value * int(left_output))
+                else:
+                    yield jqsh.values.JQSHException('integer')
+            elif isinstance(left_output, decimal.Decimal) and isinstance(right_output, jqsh.values.Array):
+                if left_output % 1 == 0:
+                    yield jqsh.values.Array(more_itertools.ncycles(right_output, int(left_output)))
                 else:
                     yield jqsh.values.JQSHException('integer')
             else:
