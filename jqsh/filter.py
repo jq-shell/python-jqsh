@@ -119,6 +119,77 @@ class Object(Parens):
         obj.terminate()
         yield obj
 
+class Conditional(Filter):
+    def __init__(self, attributes):
+        self.attributes = list(attributes)
+    
+    def __repr__(self):
+        return 'jqsh.filter.' + self.__class__.__name__ + '(' + repr(self.attributes) + ')'
+    
+    def __str__(self):
+        return ' '.join(attribute_name + ' ' + str(attribute_value) for attribute_name, attribute_value in self.attributes) + ' end'
+    
+    def run(self, input_channel):
+        for attribute_name, attribute_value in self.attributes:
+            if attribute_name in ('if', 'elif', 'elseIf'):
+                input_channel, conditional_input = input_channel / 2
+                try:
+                    conditional = bool(next(attribute_value.start(conditional_input)))
+                except StopIteration:
+                    yield jqsh.values.JQSHException('empty')
+                    return
+            elif attribute_name == 'then':
+                if not conditional:
+                    continue
+                yield from attribute_value.start(input_channel)
+            elif attribute_name == 'else':
+                if conditional:
+                    continue
+                yield from attribute_value.start(input_channel)
+            else:
+                raise NotImplementedError('unknown clause in if filter')
+
+class Try(Conditional):
+    def run(self, input_channel):
+        exception_handlers = {}
+        default_handler = None
+        else_handler = None
+        exception_names = []
+        for attribute_name, attribute_value in self.attributes:
+            if attribute_name == 'try':
+                try_block = attribute_value
+            elif attribute_name == 'catch':
+                input_channel, exception_name_input = input_channel / 2
+                try:
+                    exception_names.append(attribute_value.sensible_string(exception_name_input))
+                except (StopIteration, TypeError):
+                    yield jqsh.values.JQSHException('sensibleString')
+                    return
+            elif attribute_name == 'then':
+                for exception_name in exception_names:
+                    exception_handlers[exception_name] = attribute_value
+            elif attribute_name == 'except':
+                default_handler = attribute_value
+            elif attribute_name == 'else':
+                else_handler = attribute_value
+        try_input, except_input = input_channel / 2
+        try_output, ret = try_block.start(try_input) / 2
+        for value in try_output:
+            if isinstance(value, jqsh.values.JQSHException):
+                if value.name in exception_handlers:
+                    yield from exception_handlers[value.name].start(except_input) #TODO modify context to allow re-raise
+                    return
+                elif default_handler is not None:
+                    yield from default_handler.start(except_input) #TODO modify context to allow re-raise
+                    return
+                else:
+                    yield value
+                    return
+        if else_handler is None:
+            yield from ret
+        else:
+            yield from else_handler.start(except_input)
+
 class Name(Filter):
     def __init__(self, name):
         self.name = name

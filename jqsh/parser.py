@@ -91,9 +91,14 @@ json_tokens = [ # token types that are allowed in pure JSON
     TokenType.string
 ]
 
+keyword_paren_filters = {
+    'if': jqsh.filter.Conditional,
+    'try': jqsh.filter.Try
+}
+
 keyword_parens = { # a dictionary that maps starting keywords of keyword parens to the possible inner keywords. All keyword parens end with the “end” keyword.
     'if': {'then', 'elif', 'elseIf', 'else'},
-    'try': {'catch', 'except', 'else'}
+    'try': {'catch', 'then', 'except', 'else'}
 }
 
 matching_parens = { # a dictionary that maps opening parenthesis-like tokens (parens) to the associated closing parens
@@ -228,6 +233,10 @@ def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}, cont
         else:
             return False
     
+    def make_keyword_paren_filter(attributes):
+        attributes = list(attributes)
+        return keyword_paren_filters[attributes[0][0]]((attribute_name, parse(attribute_tokens, line_numbers=line_numbers, allowed_filters=allowed_filters, context=context)) for attribute_name, attribute_tokens in attributes)
+    
     def raise_for_filter(the_filter):
         if filter_is_allowed(the_filter):
             return the_filter
@@ -255,20 +264,34 @@ def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}, cont
     for i, token in reversed(list(enumerate(tokens))): # iterating over the token list in reverse because we modify it in the process
         if not isinstance(token, Token):
             continue
-        elif token.type in matching_parens.values():
+        elif token.type in matching_parens.values() or token == Token(TokenType.name, text='end'):
             if paren_balance == 0:
                 paren_start = i
+                if token == Token(TokenType.name, text='end'):
+                    middle_keywords = []
             paren_balance += 1
-        elif token.type in matching_parens.keys():
+        elif token.type in matching_parens.keys() or token.type is TokenType.name and token.text in keyword_parens.keys():
             paren_balance -= 1
             if paren_balance < 0:
-                raise Incomplete('too many opening parens of type ' + repr(token.type))
+                raise Incomplete('too many opening parens of type ' + repr(token.text if token.type is TokenType.name else token.type))
             elif paren_balance == 0:
-                if matching_parens[token.type] is tokens[paren_start].type:
-                    tokens[i:paren_start + 1] = [raise_for_filter(paren_filters[token.type](attribute=parse(tokens[i + 1:paren_start], line_numbers=line_numbers, allowed_filters=allowed_filters)))] # parse the inside of the parens
+                if token.type is TokenType.name:
+                    middle_keywords = [index for index in middle_keywords if tokens[index].text in keyword_parens[token.text]]
+                    attributes = []
+                    last_index = paren_start
+                    for index in middle_keywords:
+                        attributes.append((tokens[index].text, tokens[index + 1:last_index]))
+                        last_index = index
+                    attributes.append((token.text, tokens[i + 1:last_index]))
+                    tokens[i:paren_start + 1] = [raise_for_filter(make_keyword_paren_filter(reversed(attributes)))]
                 else:
-                    raise SyntaxError('opening paren of type ' + repr(token.type) + ' does not match closing paren of type ' + repr(tokens[paren_start].type))
+                    if matching_parens[token.type] is tokens[paren_start].type:
+                        tokens[i:paren_start + 1] = [raise_for_filter(paren_filters[token.type](attribute=parse(tokens[i + 1:paren_start], line_numbers=line_numbers, allowed_filters=allowed_filters)))] # parse the inside of the parens
+                    else:
+                        raise SyntaxError('opening paren of type ' + repr(token.type) + ' does not match closing paren of type ' + repr(tokens[paren_start].type))
                 paren_start = None
+        elif paren_balance == 1 and token.type is TokenType.name:
+            middle_keywords.append(i)
     if paren_balance != 0:
         raise SyntaxError('mismatched parens')
     

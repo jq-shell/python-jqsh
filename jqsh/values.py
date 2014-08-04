@@ -115,6 +115,9 @@ class JQSHException(Value):
 class Null(Value):
     value = None
     
+    def __bool__(self):
+        return False
+    
     @jqsh.channel.coerce_other
     def __eq__(self, other):
         if isinstance(other, Null):
@@ -185,6 +188,9 @@ class Boolean(Value):
         yield terminal.bold(terminal.color(28)('true' if self.value else 'false'))
 
 class Number(Value, decimal.Decimal):
+    def __bool__(self):
+        return True
+    
     @jqsh.channel.coerce_other
     def __eq__(self, other):
         if isinstance(other, Number):
