@@ -223,26 +223,81 @@ class Number(Value, decimal.Decimal):
     def value(self):
         return self
 
-class String(Value, jqsh.channel.Channel):
+class String(Value, jqsh.channel.Channel, collections.abc.Sequence):
     @jqsh.channel.coerce_other
     def __eq__(self, other):
         if isinstance(other, String):
+            for index in itertools.count():
+                if len(self) <= index: #TODO avoid calling len(self) if possible
+                    if len(other) <= index: #TODO avoid calling len(other) if possible
+                        return True
+                    else:
+                        return False
+                elif len(other) <= index:
+                    return False
+                elif self[index] != other[index]:
+                    return False
             return self.value == other.value
         else:
             return False
     
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            start = key.start
+            if start is None:
+                start = 0
+            stop = key.stop
+            if start < 0 or stop < 0:
+                start, stop, step = key.indices(len(self))
+            else:
+                step = key.step
+                if step is None:
+                    step = -1 if stop < start else 1
+            return String(itertools.islice(self, start, stop, step))
+        while True:
+            if len(self.value_store) > key:
+                return self.value_store[key]
+            try:
+                self.pop()
+            except StopIteration as e:
+                if len(self.value_store) > key:
+                    return self.value_store[key]
+                raise IndexError('Index {} is out of bounds for jqsh array'.format(key)) from e
+    
     def __hash__(self):
         return hash(self.value)
     
-    def __init__(self, value=''):
-        self.value = str(value)
+    def __init__(self, value='', terminated=True):
+        self.value_store = ''
+        super().__init__(str(value), terminated=terminated)
+    
+    def __iter__(self):
+        for index in itertools.count():
+            try:
+                yield self[index]
+            except IndexError as e:
+                raise StopIteration('Reached end of jqsh string') from e
+    
+    def __len__(self):
+        while not self.terminated:
+            with contextlib.suppress(StopIteration):
+                self.pop()
+        return len(self.value_store)
     
     @jqsh.channel.coerce_other
     def __lt__(self, other):
         if any(isinstance(other, other_class) for other_class in (JQSHException, Null, Boolean, Number)):
             return False
         elif isinstance(other, String):
-            return self.value < other.value
+            for index in itertools.count():
+                if len(other) <= index: #TODO avoid calling len(other) if possible
+                    return False
+                elif len(self) <= index: #TODO avoid calling len(self) if possible
+                    return True
+                elif self[index] < other[index]:
+                    return True
+                elif self[index] > other[index]:
+                    return False
         else:
             return True
     
@@ -251,13 +306,36 @@ class String(Value, jqsh.channel.Channel):
         
         return jqsh.filter.StringLiteral.representation(self.value)
     
+    def push(self, value):
+        error_message = 'String channel only accepts valid Unicode strings'
+        if not isinstance(value, str):
+            raise TypeError(error_message)
+        try:
+            value.encode('utf-16')
+        except UnicodeEncodeError as e:
+            raise ValueError(error_message) from e
+        with self.input_lock:
+            if self.input_terminated:
+                raise RuntimeError('jqsh channel has terminated')
+            self.value_queue.put(value)
+    
     def serializable(self):
         return True #TODO add support for extended strings(regex), mark them as unserializable
+    
+    def store_value(self, value):
+        self.value_store += value
     
     def syntax_highlight_lines(self, terminal):
         import jqsh.filter
         
         yield terminal.color(9)('"') + ''.join(terminal.color(202 if jqsh.filter.StringLiteral.escape(character).startswith('\\') else 1)(jqsh.filter.StringLiteral.escape(character)) for character in self.value) + terminal.color(9)('"')
+    
+    @property
+    def value(self):
+        while not self.terminated:
+            with contextlib.suppress(StopIteration):
+                self.pop()
+        return self.value_store
 
 class Array(Value, jqsh.channel.Channel, collections.abc.Sequence):
     def __eq__(self, other):
@@ -277,7 +355,17 @@ class Array(Value, jqsh.channel.Channel, collections.abc.Sequence):
     
     def __getitem__(self, key):
         if isinstance(key, slice):
-            return Array(itertools.islice(self, *key.indices(len(self)))) #TODO avoid calling len(self) if possible (key.start and key.stop are >= 0)
+            start = key.start
+            if start is None:
+                start = 0
+            stop = key.stop
+            if start < 0 or stop < 0:
+                start, stop, step = key.indices(len(self))
+            else:
+                step = key.step
+                if step is None:
+                    step = -1 if stop < start else 1
+            return Array(itertools.islice(self, start, stop, step))
         while True:
             if len(self.value_store) > key:
                 return self.value_store[key]
@@ -295,8 +383,8 @@ class Array(Value, jqsh.channel.Channel, collections.abc.Sequence):
             return -1
     
     def __init__(self, values=(), terminated=True):
-        super().__init__(*values, terminated=terminated)
         self.value_store = []
+        super().__init__(*values, terminated=terminated)
     
     def __iter__(self):
         for index in itertools.count():
@@ -316,9 +404,9 @@ class Array(Value, jqsh.channel.Channel, collections.abc.Sequence):
             return False
         elif isinstance(other, Array):
             for index in itertools.count():
-                if len(other) <= index:
+                if len(other) <= index: #TODO avoid calling len(other) if possible
                     return False
-                elif len(self) <= index:
+                elif len(self) <= index: #TODO avoid calling len(self) if possible
                     return True
                 elif self[index] < other[index]:
                     return True
@@ -391,8 +479,8 @@ class Object(Value, jqsh.channel.Channel, collections.abc.Mapping):
     def __init__(self, values=(), terminated=True):
         if isinstance(values, dict) or isinstance(values, Object):
             values = values.items()
-        super().__init__(*values, terminated=terminated)
         self.value_store = collections.OrderedDict()
+        super().__init__(*values, terminated=terminated)
     
     def __iter__(self):
         return iter(self.keys())
