@@ -530,7 +530,7 @@ class Object(Value, jqsh.channel.Channel, collections.abc.Mapping):
             return True
     
     def __str__(self):
-        return '{' + ', '.join(str(key) + ': ' + str(item) for key, item in self.items()) + '}'
+        return '{' + ', '.join(str(key) + ': ' + str(item) for key, item in sorted(self.items())) + '}'
     
     def items(self):
         return ObjectItemsView(self)
@@ -596,7 +596,7 @@ class Object(Value, jqsh.channel.Channel, collections.abc.Mapping):
                             yield ' ' * 2 + line
                         else:
                             yield ' ' * 2 + last_key_line + terminal.color(15)(': ') + line
-                            last_key_line is None
+                            last_key_line = None
             has_items = True
         if has_items:
             yield terminal.bold(terminal.color(15)('}'))
