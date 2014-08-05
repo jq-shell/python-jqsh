@@ -100,6 +100,9 @@ class JQSHException(Value):
         return False
     
     def syntax_highlight_lines(self, terminal):
+        if not terminal.does_styling:
+            yield str(self)
+            return
         yield '\rjqsh: uncaught exception: ' + self.name
         if self.name == 'assignment' and 'target_filter' in self.kwargs:
             yield 'cannot assign to filter of type ' + self.kwargs['target_filter'].__class__.__name__
@@ -147,6 +150,9 @@ class Null(Value):
         return True
     
     def syntax_highlight_lines(self, terminal):
+        if not terminal.does_styling:
+            yield str(self)
+            return
         yield terminal.bold(terminal.color(28)('null'))
 
 class Boolean(Value):
@@ -185,6 +191,9 @@ class Boolean(Value):
         return True
     
     def syntax_highlight_lines(self, terminal):
+        if not terminal.does_styling:
+            yield str(self)
+            return
         yield terminal.bold(terminal.color(28)('true' if self.value else 'false'))
 
 class Number(Value, decimal.Decimal):
@@ -217,6 +226,9 @@ class Number(Value, decimal.Decimal):
         return True
     
     def syntax_highlight_lines(self, terminal):
+        if not terminal.does_styling:
+            yield str(self)
+            return
         yield terminal.color(32)(str(self))
     
     @property
@@ -328,6 +340,9 @@ class String(Value, jqsh.channel.Channel, collections.abc.Sequence):
     def syntax_highlight_lines(self, terminal):
         import jqsh.filter
         
+        if not terminal.does_styling:
+            yield str(self)
+            return
         yield terminal.color(9)('"') + ''.join(terminal.color(202 if jqsh.filter.StringLiteral.escape(character).startswith('\\') else 1)(jqsh.filter.StringLiteral.escape(character)) for character in self.value) + terminal.color(9)('"')
     
     @property
@@ -425,6 +440,9 @@ class Array(Value, jqsh.channel.Channel, collections.abc.Sequence):
         self.value_store.append(value)
     
     def syntax_highlight_lines(self, terminal):
+        if not terminal.does_styling:
+            yield str(self)
+            return
         has_items = False
         iter_self = more_itertools.peekable(self)
         for item in iter_self:
@@ -537,6 +555,9 @@ class Object(Value, jqsh.channel.Channel, collections.abc.Mapping):
         self.value_store[key] = value
     
     def syntax_highlight_lines(self, terminal):
+        if not terminal.does_styling:
+            yield str(self)
+            return
         has_items = False
         iter_self = more_itertools.peekable(sorted(list(self.keys())))
         for item in iter_self:
