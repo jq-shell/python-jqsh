@@ -135,7 +135,11 @@ class Conditional(Filter):
             if attribute_name in ('if', 'elif', 'elseIf'):
                 input_channel, conditional_input = input_channel / 2
                 try:
-                    conditional = bool(next(attribute_value.start(conditional_input)))
+                    next_value = next(attribute_value.start(conditional_input))
+                    if isinstance(next_value, jqsh.values.JQSHException):
+                        yield next_value
+                        return
+                    conditional = bool(next_value)
                 except StopIteration:
                     yield jqsh.values.JQSHException('empty')
                     return
