@@ -553,10 +553,11 @@ class Command(UnaryOperator):
             yield jqsh.values.JQSHException('permission')
             return
         for value in input_channel:
-            popen.stdin.write(b''.join(str(value).encode('utf-8') for token in jqsh.parser.json_to_tokens(value, indent_width=None)))
+            popen.stdin.write(str(value).encode('utf-8') + b'\n')
         popen.stdin.write(b'\x04')
+        popen.stdin.close()
         try:
-            yield from jqsh.parser.parse_json_values(popen.stdout.read().decode('utf-8'))
+            yield from jqsh.parser.parse_json_values(popen.stdout.read().decode('utf-8')) #TODO don't read everything before starting to decode
         except (UnicodeDecodeError, SyntaxError, jqsh.parser.Incomplete):
             yield jqsh.values.JQSHException('commandOutput')
 
