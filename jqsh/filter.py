@@ -1,5 +1,6 @@
 import sys
 
+import contextlib
 import copy
 import decimal
 import itertools
@@ -423,6 +424,19 @@ class Apply(Operator):
             output_channel.terminate()
             output_channel.get_namespaces(input_channel)
             return
+        elif self.attributes[0].__class__ == Command: # command with arguments
+            try:
+                input_channel, string_input, *string_inputs = input_channel / (len(self.attributes) + 1)
+                command_name = [self.attributes[0].attribute.sensible_string(string_input)]
+                for attribute, string_input in zip(self.attributes[1:], string_inputs):
+                    command_name.append(attribute.sensible_string(string_input))
+            except (StopIteration, TypeError):
+                output_channel.throw('sensibleString')
+                return
+            for value in Command.run_command(command_name, input_channel):
+                output_channel.push(value)
+            output_channel.get_namespaces(input_channel)
+            output_channel.terminate()
         else: # built-in function with arguments
             input_channel, string_input = input_channel / 2
             try:
@@ -535,15 +549,10 @@ class UnaryOperator(Filter):
 class Command(UnaryOperator):
     operator_string = '!'
     
-    def run(self, input_channel):
+    @staticmethod
+    def run_command(command_name, input_channel):
         import jqsh.parser
         
-        input_channel, attribute_input = input_channel / 2
-        try:
-            command_name = self.attribute.sensible_string(attribute_input)
-        except (StopIteration, TypeError):
-            yield jqsh.values.JQSHException('sensibleString')
-            return
         try:
             popen = subprocess.Popen(command_name, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         except FileNotFoundError:
@@ -555,11 +564,21 @@ class Command(UnaryOperator):
         for value in input_channel:
             popen.stdin.write(str(value).encode('utf-8') + b'\n')
         popen.stdin.write(b'\x04')
-        popen.stdin.close()
+        with contextlib.suppress(BrokenPipeError):
+            popen.stdin.close()
         try:
             yield from jqsh.parser.parse_json_values(popen.stdout.read().decode('utf-8')) #TODO don't read everything before starting to decode
         except (UnicodeDecodeError, SyntaxError, jqsh.parser.Incomplete):
             yield jqsh.values.JQSHException('commandOutput')
+    
+    def run(self, input_channel):
+        input_channel, attribute_input = input_channel / 2
+        try:
+            command_name = self.attribute.sensible_string(attribute_input)
+        except (StopIteration, TypeError):
+            yield jqsh.values.JQSHException('sensibleString')
+            return
+        yield from self.run_command(command_name, input_channel)
 
 class GlobalVariable(UnaryOperator):
     operator_string = '$'
