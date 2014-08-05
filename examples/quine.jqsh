@@ -1,1 +1,3 @@
+#!/usr/bin/env jqsh
+
 "|((34|implode)+.)*2"|((34|implode)+.)*2
