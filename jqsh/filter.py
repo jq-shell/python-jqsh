@@ -283,7 +283,10 @@ class StringLiteral(Filter):
             return '\\"'
         elif character == '\\':
             return '\\\\'
-        elif ord(character) <= 0x1f:
+        elif ord(character) > 0x10000:
+            codepoint = ord(character) - 0x10000
+            return '\\u{:04x}\\u{:04x}'.format(0xd800 + (codepoint >> 0xa), 0xdc00 + (codepoint & 0x3ff))
+        elif ord(character) < 0x20 or ord(character) >= 0x7f:
             return '\\u{:04x}'.format(ord(character))
         else:
             return character

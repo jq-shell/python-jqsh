@@ -257,7 +257,7 @@ class String(Value, jqsh.channel.Channel):
     def syntax_highlight_lines(self, terminal):
         import jqsh.filter
         
-        yield terminal.color(9)('"') + terminal.color(1)(''.join(jqsh.filter.StringLiteral.escape(character) for character in self.value)) + terminal.color(9)('"')
+        yield terminal.color(9)('"') + ''.join(terminal.color(202 if jqsh.filter.StringLiteral.escape(character).startswith('\\') else 1)(jqsh.filter.StringLiteral.escape(character)) for character in self.value) + terminal.color(9)('"')
 
 class Array(Value, jqsh.channel.Channel, collections.abc.Sequence):
     def __eq__(self, other):
