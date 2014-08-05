@@ -175,46 +175,6 @@ def illegal_token_exception(token, position=None, expected=None, line_numbers=Fa
     else:
         return SyntaxError('illegal ' + ('' if token.type is TokenType.illegal else token.type.name + ' ') + 'token' + ((' in line ' + str(token.line) if line_numbers and token.line is not None else '') if position is None else ' at position ' + repr(position)) + ('' if expected is None else ' (expected ' + ' or '.join(sorted(expected_token_type.name for expected_token_type in expected)) + ')'))
 
-def json_to_tokens(json_value, *, allow_extension_types=False, indent_level=0, indent_width=2):
-    single_indent = '' if indent_width is None else ' ' * indent_width
-    indent = single_indent * indent_level
-    if allow_extension_types and isinstance(json_value, tuple) and len(json_value) == 2:
-        yield Token(TokenType.open_paren, token_string='(' + ('' if indent_width is None else '\n' + indent + single_indent))
-        yield from json_to_tokens(json_value[0], allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
-        yield Token(TokenType.colon, token_string=': ')
-        yield from json_to_tokens(json_value[1], allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
-        yield Token(TokenType.close_paren, token_string=('' if indent_width is None else '\n' + indent) + ')' + ('\n' if indent_level == 0 else ''))
-    elif json_value is False:
-        yield Token(TokenType.name, token_string='false' + ('\n' if indent_level == 0 else ''), text='false')
-    elif json_value is None:
-        yield Token(TokenType.name, token_string='null' + ('\n' if indent_level == 0 else ''), text='null')
-    elif allow_extension_types and isinstance(json_value, jqsh.values.JQSHException):
-        yield json_value
-    elif json_value is True:
-        yield Token(TokenType.name, token_string='true' + ('\n' if indent_level == 0 else ''), text='true')
-    elif isinstance(json_value, decimal.Decimal) or isinstance(json_value, int) or isinstance(json_value, float):
-        yield Token(TokenType.number, token_string=str(json_value) + ('\n' if indent_level == 0 else ''), text=str(json_value))
-    elif isinstance(json_value, list):
-        yield Token(TokenType.open_array, token_string=('[' + '\n' + indent + single_indent if indent_width is not None and len(json_value) else '['))
-        for i, item in enumerate(json_value):
-            if i > 0:
-                yield Token(TokenType.comma, token_string=',' + (' ' if indent_width is None else '\n' + indent + single_indent))
-            yield from json_to_tokens(item, allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
-        yield Token(TokenType.close_array, token_string=('\n' + indent + ']' if indent_width is not None and len(json_value) else ']') + ('\n' if indent_level == 0 else ''))
-    elif isinstance(json_value, dict):
-        yield Token(TokenType.open_object, token_string=('{' + '\n' + indent + single_indent if indent_width is not None and len(json_value) else '{'))
-        for i, (key, value) in enumerate(sorted(json_value.items(), key=lambda pair: pair[0])): # sort the pairs of an object by their names
-            if i > 0:
-                yield Token(TokenType.comma, token_string=',' + (' ' if indent_width is None else '\n' + indent + single_indent))
-            yield Token(TokenType.string, token_string=jqsh.filter.StringLiteral.representation(key), text=key)
-            yield Token(TokenType.colon, token_string=': ')
-            yield from json_to_tokens(value, allow_extension_types=allow_extension_types, indent_level=indent_level + 1, indent_width=indent_width)
-        yield Token(TokenType.close_object, token_string=('\n' + indent + '}' if indent_width is not None and len(json_value) else '}') + ('\n' if indent_level == 0 else ''))
-    elif isinstance(json_value, str):
-        yield Token(TokenType.string, token_string=jqsh.filter.StringLiteral.representation(json_value) + ('\n' if indent_level == 0 else ''), text=json_value)
-    else:
-        yield Token(TokenType.illegal)
-
 def parse(tokens, *, line_numbers=False, allowed_filters={'default': True}, context=jqsh.context.FilterContext()):
     def filter_is_allowed(the_filter):
         if isinstance(allowed_filters, dict):
