@@ -233,7 +233,7 @@ class Number(Value, decimal.Decimal):
     
     @property
     def value(self):
-        return self
+        return decimal.Decimal(self)
 
 class String(Value, jqsh.channel.Channel, collections.abc.Sequence):
     @jqsh.channel.coerce_other
