@@ -3,8 +3,8 @@
 """A shell based on jq.
 
 Usage:
-  jqsh [<module_file>]
-  jqsh -c <filter> | --filter=<filter>
+  jqsh [<module_file> [<arguments>...]]
+  jqsh -c <filter> | --filter=<filter> [<arguments>...]
   jqsh -h | --help
 
 Options:
@@ -17,6 +17,7 @@ import sys
 sys.path.append('/opt/py')
 
 import jqsh.channel
+import jqsh.context
 import jqsh.cli
 import jqsh.filter
 import jqsh.parser
@@ -27,9 +28,10 @@ arguments = sys.argv[1:]
 
 filter_argument = None
 module = None
+parse_options = True
 
 while len(arguments):
-    if arguments[0].startswith('-c') or arguments[0].startswith('--filter=') or arguments[0] == '--filter':
+    if parse_options and (arguments[0].startswith('-c') or arguments[0].startswith('--filter=') or arguments[0] == '--filter'):
         if arguments[0] == '-c' and len(arguments) > 1:
             filter_argument = arguments[1]
             arguments = arguments[2:]
@@ -42,20 +44,26 @@ while len(arguments):
         elif arguments[0] == '--filter':
             filter_argument = arguments[1]
             arguments = arguments[2:]
-    elif arguments[0] == '--help' or arguments[0].startswith('-h'):
+    elif parse_options and (arguments[0] == '--help' or arguments[0].startswith('-h')):
         print('jqsh:', __doc__)
         sys.exit()
-    elif filter_argument is None and module is None:
-        module = pathlib.Path(arguments[0])
+    elif parse_options and arguments[0] == '--':
+        parse_options = False
         arguments.pop(0)
+    elif parse_options and arguments[0].startswith('-') and len(arguments[0]) > 1:
+        sys.exit('[!!!!] jqsh: invalid option: ' + arguments[0])
+    elif filter_argument is None and module is None:
+        module = pathlib.Path(arguments[0]) #TODO handle reading from stdin
+        arguments.pop(0)
+        parse_options = False
     else:
-        sys.exit('[!!!!] invalid argument: ' + arguments[0])
+        break
 
 if filter_argument is not None or module is not None:
     if sys.stdin.isatty():
-        stdin_channel = jqsh.channel.Channel(terminated=True)
+        stdin_channel = jqsh.channel.Channel(context=jqsh.context.FilterContext.command_line_context(['--filter' if filter_argument is not None else module] + arguments), terminated=True)
     else:
-        stdin_channel = jqsh.channel.Channel(*jqsh.parser.parse_json_values(sys.stdin.read()), terminated=True) #TODO fix: this currently waits to read the entire stdin before even looking at the filter
+        stdin_channel = jqsh.channel.Channel(*jqsh.parser.parse_json_values(sys.stdin.read()), context=jqsh.context.FilterContext.command_line_context(['--filter' if filter_argument is not None else module] + arguments), terminated=True) #TODO fix: this currently waits to read the entire stdin before even looking at the filter
     if module is None:
         try:
             the_filter = jqsh.parser.parse(filter_argument)

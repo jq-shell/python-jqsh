@@ -389,7 +389,7 @@ class Apply(Operator):
             output_channel.get_namespaces(input_channel)
             output_channel.pull(input_channel)
         elif len(self.attributes) == 2 and all(attribute.__class__ == NumberLiteral for attribute in self.attributes): # decimal number
-            output_channel.push(decimal.Decimal(str(self.attributes[0]) + '.' + str(self.attributes[1])))
+            output_channel.push(jqsh.values.Number(str(self.attributes[0]) + '.' + str(self.attributes[1])))
             output_channel.terminate()
             output_channel.get_namespaces(input_channel)
             return
@@ -402,14 +402,14 @@ class Apply(Operator):
                 output_channel.throw('empty')
                 return
             for value in input_channel:
-                if isinstance(value, dict):
+                if isinstance(value, jqsh.values.Object):
                     if key in value:
                         output_channel.push(value[key])
                     else:
                         output_channel.throw('key')
                         return
-                elif isinstance(value, list):
-                    if isinstance(key, decimal.Decimal):
+                elif isinstance(value, jqsh.values.Array):
+                    if isinstance(key, jqsh.values.Number):
                         if key % 1 == 0:
                             try:
                                 output_channel.push(value[int(key)])

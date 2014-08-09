@@ -50,18 +50,43 @@ def wrap_builtin(f):
         handle_namespaces.start()
         while True:
             try:
-                token = input_channel.pop()
+                value = input_channel.pop()
             except StopIteration:
                 break
-            bridge_channel.push(token)
-            if isinstance(token, Exception):
-                output_channel.push(token)
+            bridge_channel.push(value)
+            if isinstance(value, jqsh.values.JQSHException):
+                output_channel.push(value)
                 break
         bridge_channel.terminate()
         helper_thread.join()
         handle_namespaces.join()
         output_channel.terminate()
     return wrapper
+
+@def_builtin(0)
+@wrap_builtin
+def argv(input_channel):
+    for argument in input_channel.context.argv:
+        yield jqsh.values.String(argument)
+
+@def_builtin(1)
+@wrap_builtin
+def argv(index, input_channel):
+    try:
+        index = next(index.start(input_channel))
+    except StopIteration:
+        yield jqsh.values.JQSHException('empty')
+        return
+    if not isinstance(index, jqsh.values.Number):
+        yield jqsh.values.JQSHException('type')
+        return
+    if index.value % 1 == 0:
+        try:
+            yield jqsh.values.String(input_channel.context.argv[int(index.value)])
+        except IndexError:
+            yield jqsh.values.JQSHException('index')
+    else:
+        yield jqsh.values.JQSHException('integer')
 
 @def_builtin(1)
 @wrap_builtin
@@ -79,6 +104,11 @@ def empty(input_channel):
 @wrap_builtin
 def false(input_channel):
     yield False
+
+@def_builtin(0)
+@wrap_builtin
+def isMain(input_channel):
+    yield jqsh.values.Boolean(input_channel.context.is_main)
 
 @def_builtin(2, name='for')
 @wrap_builtin
