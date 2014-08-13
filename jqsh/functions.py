@@ -92,7 +92,9 @@ def argv(index, input_channel):
 @wrap_builtin
 def each(the_filter, input_channel):
     for value in input_channel:
-        yield from the_filter.start(jqsh.channel.Channel(value, terminated=True))
+        value_input = jqsh.channel.Channel(value, terminated=True, empty_namespaces=False)
+        threading.Thread(target=value_input.get_namespaces, args=(input_channel,)).start()
+        yield from the_filter.start(value_input)
 
 @def_builtin(0)
 @wrap_builtin
@@ -103,7 +105,7 @@ def empty(input_channel):
 @def_builtin(0)
 @wrap_builtin
 def false(input_channel):
-    yield False
+    yield jqsh.values.Boolean(False)
 
 @def_builtin(0)
 @wrap_builtin
@@ -123,16 +125,24 @@ def jqsh_for(initial, body, input_channel):
 @def_builtin(0)
 @wrap_builtin
 def implode(input_channel):
-    ret = ''
-    for value in input_channel:
-        if not isinstance(value, decimal.Decimal):
-            yield jqsh.values.JQSHException('type')
-            return
-        if value % 1 != 0:
-            yield jqsh.values.JQSHException('integer')
-            return
-        ret += chr(value)
+    ret = jqsh.values.String(terminated=False)
     yield ret
+    for value in input_channel:
+        if not isinstance(value, jqsh.values.Number):
+            yield jqsh.values.JQSHException('type')
+            ret.terminate()
+            return
+        if value.value % 1 != 0:
+            yield jqsh.values.JQSHException('integer')
+            ret.terminate()
+            return
+        try:
+            ret.push(chr(value.value))
+        except ValueError:
+            yield jqsh.values.JQSHException('unicode')
+            ret.terminate()
+            return
+    ret.terminate()
 
 @def_builtin(1)
 @wrap_builtin
@@ -143,9 +153,9 @@ def nth(index, input_channel):
     except StopIteration:
         yield jqsh.values.JQSHException('empty')
         return
-    if isinstance(index_value, decimal.Decimal):
-        if index_value % 1 == 0:
-            index_value = int(index_value)
+    if isinstance(index_value, jqsh.values.Number):
+        if index_value.value % 1 == 0:
+            index_value = int(index_value.value)
         else:
             yield jqsh.values.JQSHException('integer')
             return
@@ -166,15 +176,15 @@ def nth(index, input_channel):
 @def_builtin(0)
 @wrap_builtin
 def null(input_channel):
-    yield None
+    yield jqsh.values.Null()
 
 @def_builtin(0)
 @wrap_builtin
 def range(input_channel):
     for value in input_channel:
-        if isinstance(value, decimal.Decimal):
-            if value % 1 == 0:
-                yield from (decimal.Decimal(number) for number in python_builtins.range(int(value)))
+        if isinstance(value, jqsh.values.Number):
+            if value.value % 1 == 0:
+                yield from (jqsh.values.Number(number) for number in python_builtins.range(int(value.value)))
             else:
                 yield jqsh.values.JQSHException('integer')
         else:
@@ -192,4 +202,4 @@ def reduce(initial, body, input_channel):
 @def_builtin(0)
 @wrap_builtin
 def true(input_channel):
-    yield True
+    yield jqsh.values.Boolean(True)
