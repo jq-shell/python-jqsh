@@ -20,6 +20,6 @@ $fibStream = def (           # this verison just keeps outputting the Fibonacci 
 
 if isMain then               # isMain outputs a boolean that is false iff called during an import, think Python's __name__ == '__main__'
     argv 1                   # when called with one argument, argv returns the nth member of the program's argument vector
-    | fromjson               # decodes the argument from a JSON string, in this case it should be a number
+    | @json decode           # decodes the argument from a JSON string, in this case it should be a number
     | $fib
 end
