@@ -62,16 +62,8 @@ class Channel:
         return self
     
     def __next__(self):
-        """Raises StopIteration if the channel is terminated."""
-        with self.output_lock:
-            if self.terminated:
-                raise StopIteration('jqsh channel has terminated')
-            value = self.value_queue.get()
-            if isinstance(value, Terminator):
-                self.terminated = True
-                raise StopIteration('jqsh channel has terminated')
-            self.store_value(value)
-            return value
+        """An alternative to calling pop. Raises StopIteration if the channel is terminated."""
+        return self.pop()
     
     def __truediv__(self, other):
         """Splits the channel into multiple channels:
