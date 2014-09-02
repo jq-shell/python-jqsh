@@ -53,6 +53,10 @@ class Value(abc.ABC):
     def __repr__(self):
         return 'jqsh.values.' + self.__class__.__name__ + '(' + repr(self.value) + ')'
     
+    def print_to_terminal(self, terminal, output_file):
+        for line in self.syntax_highlight_lines(terminal):
+            print(line, file=output_file, flush=True)
+    
     @abc.abstractmethod
     def serializable(self):
         """Whether or not the value is JSON-serializable."""
@@ -87,14 +91,6 @@ class JQSHException(Value):
     
     def __repr__(self):
         return 'jqsh.values.' + self.__class__.__name__ + '(' + repr(self.name) + ')'
-    
-    def print(self, output_file=None):
-        import blessings
-        
-        if output_file is None:
-            output_file=sys.stdout
-        for line in self.syntax_highlight_lines(blessings.Terminal()):
-            print(line, file=output_file, flush=True)
     
     def serializable(self):
         return False
@@ -317,6 +313,16 @@ class String(Value, jqsh.channel.Channel, collections.abc.Sequence):
         import jqsh.filter
         
         return jqsh.filter.StringLiteral.representation(self.value)
+    
+    def print_to_terminal(self, terminal, output_file):
+        if terminal.does_styling:
+            print(terminal.color(9)('"'), end='', flush=True, file=output_file)
+            for character in self:
+                print(terminal.color(202 if jqsh.filter.StringLiteral.escape(character).startswith('\\') else 1)(jqsh.filter.StringLiteral.escape(character)), end='', flush=True, file=output_file)
+            print(terminal.color(9)('"'), flush=True, file=output_file)
+        else:
+            for line in self.syntax_highlight_lines(terminal):
+                print(line, file=output_file, flush=True)
     
     def push(self, value):
         error_message = 'String channel only accepts valid Unicode strings'

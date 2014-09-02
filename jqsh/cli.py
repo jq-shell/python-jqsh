@@ -12,11 +12,6 @@ def print_output(filter_thread, output_file=None):
     if isinstance(filter_thread, jqsh.filter.Filter):
         filter_thread = jqsh.filter.FilterThread(filter_thread)
     filter_thread.start()
-    while True:
-        try:
-            value = filter_thread.output_channel.pop()
-        except StopIteration:
-            break
-        for line in value.syntax_highlight_lines(terminal):
-            print(line, file=output_file, flush=True)
+    for value in filter_thread.output_channel:
+        value.print_to_terminal(terminal, output_file)
     return filter_thread.output_channel.namespaces()
