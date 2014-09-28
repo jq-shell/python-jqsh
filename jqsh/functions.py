@@ -40,23 +40,18 @@ def wrap_builtin(f):
         def run_thread(bridge):
             for value in f(*args, input_channel=bridge):
                 output_channel.push(value)
-                if isinstance(value, jqsh.values.JQSHException):
-                    break
         
         bridge_channel = jqsh.channel.Channel()
         helper_thread = threading.Thread(target=run_thread, kwargs={'bridge': bridge_channel})
         handle_namespaces = threading.Thread(target=input_channel.push_namespaces, args=(bridge_channel, output_channel))
         helper_thread.start()
         handle_namespaces.start()
-        while True:
-            try:
-                value = input_channel.pop()
-            except StopIteration:
-                break
-            bridge_channel.push(value)
+        for value in input_channel:
             if isinstance(value, jqsh.values.JQSHException):
                 output_channel.push(value)
                 break
+            else:
+                bridge_channel.push(value)
         bridge_channel.terminate()
         helper_thread.join()
         handle_namespaces.join()
@@ -101,6 +96,15 @@ def each(the_filter, input_channel):
 def empty(input_channel):
     return
     yield # the empty generator
+
+@def_builtin(0)
+@wrap_builtin
+def explode(input_channel):
+    for string_value in input_channel:
+        if not isinstance(string_value, jqsh.values.String):
+            yield jqsh.values.JQSHException('type')
+        for c in string_value:
+            yield ord(c)
 
 @def_builtin(0)
 @wrap_builtin
