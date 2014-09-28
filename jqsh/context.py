@@ -7,7 +7,10 @@ class FilterContext:
     
     def __init__(self):
         """Creates the default context."""
+        import jqsh.functions
+        
         self.argv = []
+        self.get_builtin = jqsh.functions.get_builtin
         self.is_main = True
     
     @classmethod

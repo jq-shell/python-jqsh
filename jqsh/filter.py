@@ -239,9 +239,9 @@ class Name(Filter):
             handle_namespaces.join()
         else:
             try:
-                builtin = jqsh.functions.get_builtin(self.name)
+                builtin = input_channel.context.get_builtin(self.name)
             except KeyError:
-                output_channel.throw(jqsh.values.JQSHException('numArgs', function_name=self.name, expected=set(jqsh.functions.builtin_functions[self.name]), received=0) if self.name in jqsh.functions.builtin_functions else jqsh.values.JQSHException('name', missing_name=self.name))
+                output_channel.throw(jqsh.values.JQSHException('numArgs', function_name=self.name, expected=set(jqsh.functions.builtin_functions[self.name]), received=0) if self.name in jqsh.functions.builtin_functions else jqsh.values.JQSHException('name', missing_name=self.name)) #TODO fix for context-based builtins
             else:
                 builtin(input_channel=input_channel, output_channel=output_channel)
     
@@ -449,9 +449,9 @@ class Apply(Operator):
                 output_channel.throw('sensibleString')
                 return
             try:
-                builtin = jqsh.functions.get_builtin(function_name, *self.attributes[1:])
+                builtin = input_channel.context.get_builtin(function_name, *self.attributes[1:])
             except KeyError:
-                output_channel.throw(jqsh.values.JQSHException('numArgs') if function_name in jqsh.functions.builtin_functions else jqsh.values.JQSHException('name', missing_name=function_name))
+                output_channel.throw(jqsh.values.JQSHException('numArgs') if function_name in jqsh.functions.builtin_functions else jqsh.values.JQSHException('name', missing_name=function_name)) #TODO fix for context-based builtins
                 return
             else:
                 builtin(*self.attributes[1:], input_channel=input_channel, output_channel=output_channel)
